@@ -1,0 +1,321 @@
+﻿* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #111; color: #eee; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+
+#gameCanvas { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 0; }
+
+/* Screens */
+.screen {
+  position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100; background: rgba(0,0,0,0.85);
+}
+.login-box {
+  background: #1a1a2e; border: 2px solid #ffd700; border-radius: 12px;
+  padding: 30px 40px; text-align: center; min-width: 340px; max-width: 600px;
+  max-height: 90vh; overflow-y: auto;
+}
+.login-box h1 { color: #ffd700; margin-bottom: 5px; font-size: 28px; }
+.login-box h2 { color: #ffd700; margin-bottom: 10px; }
+.login-box .subtitle { color: #888; margin-bottom: 15px; font-size: 14px; }
+.login-box input[type="text"] {
+  display: block; width: 100%; padding: 10px; margin: 10px 0;
+  background: #16213e; border: 1px solid #555; border-radius: 6px;
+  color: #eee; font-size: 16px; text-align: center;
+}
+
+/* Buttons */
+.btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; color: #fff; background: #444; transition: all 0.2s; display: inline-block; text-decoration: none; text-align: center; }
+.btn:hover { filter: brightness(1.2); transform: scale(1.02); }
+.btn-gold { background: linear-gradient(135deg, #f39c12, #e67e22); }
+.btn-blue { background: #2980b9; }
+.btn-red { background: #c0392b; }
+.btn-discord { background: #5865F2; font-size: 16px; padding: 12px 24px; margin: 15px 0; width: 100%; box-sizing: border-box; }
+.btn-discord:hover { background: #4752C4; }
+
+/* Discord User */
+.login-hint { color: #888; font-size: 12px; margin: 10px 0; }
+.discord-user { display: flex; align-items: center; gap: 10px; padding: 10px; background: #16213e; border-radius: 8px; margin-bottom: 12px; border: 1px solid #333; }
+.discord-avatar { width: 32px; height: 32px; border-radius: 50%; }
+.discord-avatar-placeholder { font-size: 28px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; }
+.discord-name { color: #fff; font-size: 14px; font-weight: bold; }
+.logout-link { display: block; color: #666; font-size: 11px; margin-top: 10px; text-decoration: none; }
+.logout-link:hover { color: #999; }
+
+/* Civilization Selection */
+.civ-section { margin: 15px 0; }
+.civ-section h3 { color: #ffd700; margin-bottom: 8px; font-size: 14px; }
+.civ-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 8px; }
+.civ-grid.small { grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.civ-card {
+  background: #16213e; border: 2px solid #333; border-radius: 8px;
+  padding: 8px 4px; cursor: pointer; text-align: center; transition: all 0.2s;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+}
+.civ-card:hover { border-color: #ffd700; background: #1a2a4e; }
+.civ-card.selected { border-color: #ffd700; background: #2a3a5e; box-shadow: 0 0 10px rgba(255,215,0,0.3); }
+.civ-card .civ-icon { font-size: 24px; }
+.civ-card .civ-name { font-size: 11px; color: #ccc; }
+.civ-card.small { padding: 4px 2px; }
+.civ-card.small .civ-icon { font-size: 16px; }
+.civ-card.small .civ-name { font-size: 9px; }
+.civ-desc { color: #888; font-size: 12px; min-height: 20px; }
+
+/* Death stats */
+.death-stats { margin: 10px 0; font-size: 13px; line-height: 1.8; text-align: left; padding: 8px; background: #16213e; border-radius: 6px; }
+
+/* Spawn Location Selector */
+.spawn-section { margin: 15px 0; }
+.spawn-section h3 { color: #ffd700; margin-bottom: 6px; font-size: 14px; }
+.spawn-hint { color: #888; font-size: 11px; margin-bottom: 6px; }
+.spawn-map-wrap { position: relative; display: inline-block; border: 2px solid #444; border-radius: 6px; overflow: hidden; cursor: crosshair; }
+.spawn-map-wrap:hover { border-color: #ffd700; }
+.spawn-map-wrap canvas { display: block; }
+.spawn-marker { position: absolute; color: #ff4444; font-size: 22px; font-weight: bold; pointer-events: none; transform: translate(-50%, -50%); text-shadow: 0 0 6px #ff0000, 0 0 12px #ff4444; animation: spawnPulse 1.2s ease-in-out infinite; }
+@keyframes spawnPulse { 0%,100% { transform: translate(-50%,-50%) scale(1); } 50% { transform: translate(-50%,-50%) scale(1.3); } }
+.spawn-coord { color: #aaa; font-size: 12px; margin-top: 4px; }
+
+/* Top Bar */
+#topBar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+  background: rgba(10,10,20,0.9); padding: 8px 15px;
+  display: flex; align-items: center; gap: 15px; font-size: 14px;
+  border-bottom: 1px solid #333;
+}
+.rank-badge { color: #ffd700; font-weight: bold; }
+.civ-badge { color: #aaa; font-size: 12px; }
+
+/* Shield / Streak / Protection indicators */
+.shield-indicator {
+  position: fixed; top: 40px; left: 50%; transform: translateX(-50%);
+  z-index: 55; background: rgba(52,152,219,0.9); color: #fff; padding: 6px 16px;
+  border-radius: 20px; font-size: 14px; font-weight: bold;
+  animation: shieldPulse 1s ease-in-out infinite;
+}
+.streak-hud {
+  position: fixed; top: 40px; right: 320px; z-index: 55;
+  background: rgba(231,76,60,0.9); color: #fff; padding: 4px 12px;
+  border-radius: 12px; font-size: 13px; font-weight: bold;
+}
+.prot-timer {
+  position: fixed; top: 70px; left: 50%; transform: translateX(-50%);
+  z-index: 55; background: rgba(0,255,255,0.15); color: #0ff;
+  padding: 4px 12px; border-radius: 12px; font-size: 12px;
+}
+
+/* Skill Bar */
+#skillBar {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  z-index: 50; display: flex; gap: 8px;
+}
+.skill-btn {
+  width: 56px; height: 56px; border: 2px solid #555; border-radius: 10px;
+  background: rgba(20,20,40,0.9); cursor: pointer; position: relative;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  transition: all 0.2s; overflow: hidden;
+}
+.skill-btn:hover { border-color: #ffd700; transform: scale(1.08); }
+.skill-btn.ready { border-color: #2ecc71; box-shadow: 0 0 8px rgba(46,204,113,0.4); }
+.skill-btn.on-cd { opacity: 0.6; }
+.skill-icon { font-size: 22px; z-index: 2; }
+.skill-key { font-size: 10px; color: #888; z-index: 2; }
+.skill-cd-overlay {
+  position: absolute; bottom: 0; left: 0; right: 0; height: 0%;
+  background: rgba(0,0,0,0.6); z-index: 1; transition: height 0.3s;
+}
+
+/* Side Panel */
+#sidePanel {
+  position: fixed; top: 40px; right: 0; width: 300px; bottom: 0;
+  z-index: 50; background: rgba(10,10,20,0.92);
+  border-left: 1px solid #333; display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.tab-bar {
+  display: flex; flex-wrap: wrap; gap: 2px; padding: 6px;
+  background: rgba(0,0,0,0.3); border-bottom: 1px solid #333;
+}
+.tab-btn {
+  flex: 1; min-width: 42px; padding: 5px 4px; border: none; border-radius: 4px;
+  background: transparent; color: #888; cursor: pointer; font-size: 11px;
+  font-weight: bold; transition: all 0.2s;
+}
+.tab-btn:hover { color: #fff; background: rgba(255,255,255,0.1); }
+.tab-btn.active { color: #ffd700; background: rgba(255,215,0,0.15); }
+.tab-content { display: none; flex: 1; overflow-y: auto; padding: 8px; }
+.tab-content.active { display: block; }
+
+/* Leaderboard */
+.lb-item {
+  display: flex; align-items: center; gap: 6px; padding: 4px 6px;
+  border-radius: 4px; margin-bottom: 2px; font-size: 13px; cursor: pointer;
+  transition: background 0.15s;
+}
+.lb-item:hover { background: rgba(255,255,255,0.05); }
+.lb-rank { color: #888; min-width: 18px; text-align: right; font-size: 11px; }
+.lb-color { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+.lb-civ { font-size: 14px; }
+.lb-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-cells { color: #ffd700; font-weight: bold; font-size: 12px; }
+.lb-clan { color: #888; font-size: 12px; font-weight: bold; margin: 8px 0 4px; }
+
+/* Building & Tech Items */
+.bld-item, .tech-item {
+  background: rgba(255,255,255,0.04); border: 1px solid #333; border-radius: 6px;
+  padding: 8px; margin-bottom: 6px; cursor: pointer; transition: all 0.2s;
+}
+.bld-item:hover, .tech-item:hover { border-color: #ffd700; background: rgba(255,215,0,0.05); }
+.bld-item.building { border-color: #e67e22; }
+.tech-item.researching { border-color: #9b59b6; }
+.item-header { display: flex; justify-content: space-between; margin-bottom: 3px; }
+.item-name { font-weight: bold; font-size: 13px; }
+.item-level { color: #ffd700; font-size: 12px; }
+.item-desc { color: #888; font-size: 11px; margin-bottom: 4px; }
+.item-cost { font-size: 12px; }
+.item-timer { color: #e67e22; font-size: 12px; font-weight: bold; }
+.cost-ok { color: #2ecc71; }
+.cost-bad { color: #e74c3c; }
+
+/* Quests */
+.quest-streak { color: #f39c12; font-size: 12px; font-weight: bold; margin-bottom: 6px; }
+.quest-item {
+  background: rgba(255,255,255,0.04); border: 1px solid #333; border-radius: 6px;
+  padding: 8px; margin-bottom: 6px;
+}
+.quest-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.quest-icon { font-size: 18px; }
+.quest-name { font-weight: bold; font-size: 13px; }
+.quest-desc { color: #888; font-size: 11px; margin-bottom: 6px; }
+.quest-progress-bar { height: 6px; background: #333; border-radius: 3px; overflow: hidden; }
+.quest-progress-fill { height: 100%; background: linear-gradient(90deg, #f39c12, #e67e22); border-radius: 3px; transition: width 0.3s; }
+.quest-progress-text { text-align: right; font-size: 11px; color: #888; margin-top: 2px; }
+.quest-rewards { font-size: 11px; color: #2ecc71; margin-top: 4px; }
+
+/* Trade Panel */
+.trade-panel { padding: 8px; }
+.trade-panel h3 { color: #ffd700; font-size: 14px; margin-bottom: 10px; }
+.trade-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.trade-row select {
+  flex: 1; padding: 6px; background: #16213e; border: 1px solid #555;
+  border-radius: 4px; color: #eee; font-size: 13px;
+}
+.trade-row span { color: #ffd700; font-size: 18px; }
+.trade-panel input[type="number"] {
+  width: 100%; padding: 6px; background: #16213e; border: 1px solid #555;
+  border-radius: 4px; color: #eee; font-size: 13px; margin-bottom: 6px;
+}
+.trade-rate { color: #888; font-size: 12px; margin-bottom: 8px; }
+
+/* Clan */
+.clan-list { margin-bottom: 10px; }
+.clan-item {
+  display: flex; justify-content: space-between; padding: 6px 8px;
+  background: rgba(255,255,255,0.04); border-radius: 4px; margin-bottom: 3px;
+  cursor: pointer; font-size: 13px;
+}
+.clan-item:hover { background: rgba(255,255,255,0.08); }
+.clan-create { margin-top: 8px; }
+.clan-create input {
+  display: block; width: 100%; padding: 6px; margin-bottom: 4px;
+  background: #16213e; border: 1px solid #555; border-radius: 4px; color: #eee; font-size: 13px;
+}
+.clan-create button { width: 100%; }
+
+/* Action Buttons */
+.action-buttons { padding: 8px; display: flex; gap: 6px; border-top: 1px solid #333; }
+.action-buttons .btn { flex: 1; font-size: 12px; padding: 8px 4px; }
+
+/* Minimap */
+#minimap {
+  position: fixed; bottom: 10px; right: 310px; z-index: 50;
+  border: 1px solid #555; border-radius: 6px; background: #111;
+}
+
+/* Notifications */
+.msg-box {
+  position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
+  z-index: 60; background: rgba(20,20,40,0.9); color: #ffd700;
+  padding: 8px 20px; border-radius: 8px; font-size: 14px;
+  border: 1px solid #ffd700;
+}
+.reward-box {
+  position: fixed; bottom: 130px; left: 50%; transform: translateX(-50%);
+  z-index: 60; background: rgba(46,204,113,0.9); color: #fff;
+  padding: 8px 20px; border-radius: 8px; font-size: 14px; font-weight: bold;
+}
+.combo-notif {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  z-index: 70; color: #ff6b35; font-size: 48px; font-weight: 900;
+  text-shadow: 0 0 20px rgba(255,107,53,0.8), 0 0 40px rgba(255,107,53,0.4);
+  animation: comboPop 1.2s ease-out forwards; pointer-events: none;
+}
+.streak-notif {
+  position: fixed; top: 15%; left: 50%; transform: translateX(-50%);
+  z-index: 70; background: linear-gradient(135deg, #e74c3c, #c0392b);
+  color: #fff; padding: 12px 30px; border-radius: 12px; font-size: 20px;
+  font-weight: 900; animation: streakSlide 2.5s ease-out forwards;
+  pointer-events: none; box-shadow: 0 4px 20px rgba(231,76,60,0.6);
+}
+.quest-done-notif {
+  position: fixed; top: 25%; left: 50%; transform: translateX(-50%);
+  z-index: 70; background: rgba(243,156,18,0.95); color: #fff;
+  padding: 12px 24px; border-radius: 10px; font-size: 16px; font-weight: bold;
+  animation: questDonePop 2.5s ease-out forwards; pointer-events: none;
+}
+
+/* Modal (Spy) */
+.modal {
+  position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+  z-index: 200; background: rgba(0,0,0,0.7);
+  display: flex; align-items: center; justify-content: center;
+}
+.modal-content {
+  background: #1a1a2e; border: 2px solid #3498db; border-radius: 12px;
+  padding: 20px; min-width: 300px; max-width: 400px;
+}
+.modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.modal-header h3 { color: #3498db; }
+.close-btn { background: none; border: none; color: #888; font-size: 20px; cursor: pointer; }
+.close-btn:hover { color: #fff; }
+.spy-label { color: #888; display: inline-block; width: 60px; font-size: 13px; }
+.spy-val { color: #eee; font-weight: bold; font-size: 13px; }
+#spyInfo > div { padding: 3px 0; }
+
+/* Screen flash effect */
+.screen-flash {
+  position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+  z-index: 80; background: rgba(255,255,255,0.15); pointer-events: none;
+  animation: flashEffect 0.4s ease-out forwards;
+}
+
+/* Animations */
+@keyframes comboPop {
+  0% { transform: translate(-50%,-50%) scale(0.5); opacity: 1; }
+  50% { transform: translate(-50%,-50%) scale(1.3); opacity: 1; }
+  100% { transform: translate(-50%,-50%) scale(1.5); opacity: 0; }
+}
+@keyframes streakSlide {
+  0% { transform: translateX(-50%) translateY(-30px); opacity: 0; }
+  15% { transform: translateX(-50%) translateY(0); opacity: 1; }
+  80% { opacity: 1; }
+  100% { transform: translateX(-50%) translateY(-20px); opacity: 0; }
+}
+@keyframes questDonePop {
+  0% { transform: translateX(-50%) scale(0.8); opacity: 0; }
+  15% { transform: translateX(-50%) scale(1.05); opacity: 1; }
+  80% { opacity: 1; }
+  100% { transform: translateX(-50%) scale(1); opacity: 0; }
+}
+@keyframes shieldPulse {
+  0%, 100% { box-shadow: 0 0 10px rgba(52,152,219,0.4); }
+  50% { box-shadow: 0 0 20px rgba(52,152,219,0.8); }
+}
+@keyframes flashEffect {
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #666; }

@@ -68,25 +68,42 @@
 
   <!-- Game UI -->
   <div id="gu" style="display:none">
-    <!-- Round Timer -->
-    <div id="roundTimer" class="round-timer"></div>
-
     <!-- Top Bar -->
     <div id="topBar">
       <span id="rankBadge" class="rank-badge"></span>
       <span id="civBadge" class="civ-badge"></span>
-      <span id="rTroop" class="troop-highlight">⚔️ 0/0</span>
       <span id="rFood">🌾 0</span>
       <span id="rWood">🪵 0</span>
       <span id="rStone">🪨 0</span>
       <span id="rGold">💰 0</span>
+      <span id="rAP">⚡ 0/0</span>
+      <span id="rTroop">🗡️ 0/0</span>
     </div>
 
     <!-- Shield / Streak / Protection indicators -->
     <div id="shieldIndicator" class="shield-indicator" style="display:none"></div>
     <div id="streakHud" class="streak-hud" style="display:none"></div>
-    <div id="strategicBonuses" class="strategic-bonuses"></div>
     <div id="protTimer" class="prot-timer" style="display:none"></div>
+
+    <!-- Skill Bar -->
+    <div id="skillBar">
+      <button class="skill-btn" data-skill="lightning" onclick="useSkill('lightning')" title="번개 (1)">
+        <span class="skill-icon">⚡</span><span class="skill-key">1</span>
+        <div class="skill-cd-overlay"></div>
+      </button>
+      <button class="skill-btn" data-skill="shield" onclick="useSkill('shield')" title="방패 (2)">
+        <span class="skill-icon">🛡️</span><span class="skill-key">2</span>
+        <div class="skill-cd-overlay"></div>
+      </button>
+      <button class="skill-btn" data-skill="conscript" onclick="useSkill('conscript')" title="징집 (3)">
+        <span class="skill-icon">📯</span><span class="skill-key">3</span>
+        <div class="skill-cd-overlay"></div>
+      </button>
+      <button class="skill-btn" data-skill="plunder" onclick="useSkill('plunder')" title="약탈 (4)">
+        <span class="skill-icon">💰</span><span class="skill-key">4</span>
+        <div class="skill-cd-overlay"></div>
+      </button>
+    </div>
 
     <!-- Side Panel -->
     <div id="sidePanel">
@@ -156,40 +173,10 @@
         <button onclick="doBorderPush()" class="btn btn-blue">🏴 영토 확장</button>
         <button onclick="startMassAtk()" class="btn btn-red">⚔️ 대규모 공격</button>
       </div>
-
-      <!-- Unit Deployment -->
-      <div class="unit-panel">
-        <div class="unit-panel-header">
-          <span>🎖️ 유닛 배치</span>
-          <span id="unitCount" class="unit-count">0/5</span>
-        </div>
-        <div class="unit-buttons">
-          <button onclick="deployUnit('scout')" class="btn btn-unit btn-scout" title="정찰대 (5)">
-            <span class="unit-icon">🔭</span>
-            <span class="unit-label">정찰대</span>
-            <span class="unit-cost">⚔️5</span>
-            <span class="unit-key">5</span>
-          </button>
-          <button onclick="deployUnit('army')" class="btn btn-unit btn-army" title="원정군 (6)">
-            <span class="unit-icon">⚔️</span>
-            <span class="unit-label">원정군</span>
-            <span class="unit-cost">⚔️20</span>
-            <span class="unit-key">6</span>
-          </button>
-          <button onclick="deployUnit('elite')" class="btn btn-unit btn-elite" title="정예군 (7)">
-            <span class="unit-icon">🛡️</span>
-            <span class="unit-label">정예군</span>
-            <span class="unit-cost">⚔️50</span>
-            <span class="unit-key">7</span>
-          </button>
-        </div>
-        <div id="activeUnitsList" class="active-units-list"></div>
-      </div>
     </div>
 
     <!-- Minimap -->
     <canvas id="minimap" width="300" height="150"></canvas>
-    <div id="coordHud"></div>
 
     <!-- Notifications -->
     <div id="msgBox" class="msg-box" style="display:none"></div>

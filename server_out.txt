@@ -1,0 +1,7 @@
+[Territory.io v5 — Round Mode] Starting...
+[MapGen] Seed=75030 Size=800x400
+[MapGen] Done 253ms — 32.4% land, 512 river, 8 ranges
+[MapGen] Generated 311 special tiles
+[Round 1] Fresh start — 8 bots, 103777 playable cells
+[Server] Listening on http://localhost:3000
+[Save] OK

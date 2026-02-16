@@ -70,15 +70,15 @@ function generateEarthMap(w, h) {
 
   const map = new Uint8Array(w * h);
   const cx = w * 0.5, cy = h * 0.5;
-  const maxR = Math.min(w, h) * 0.42;
+  const maxR = Math.min(w, h) * 0.48;
 
   // ---- Continent blobs ----
-  const blobN = 3 + Math.floor(Math.random() * 3);
-  const blobs = [{ x: cx, y: cy, r: maxR * (0.55 + Math.random() * 0.2) }];
+  const blobN = 4 + Math.floor(Math.random() * 3);
+  const blobs = [{ x: cx, y: cy, r: maxR * (0.7 + Math.random() * 0.2) }];
   for (let i = 1; i < blobN; i++) {
     const a = (Math.PI * 2 * i / blobN) + (Math.random() - 0.5) * 1.2;
     const d = maxR * (0.2 + Math.random() * 0.25);
-    blobs.push({ x: cx + Math.cos(a) * d, y: cy + Math.sin(a) * d, r: maxR * (0.3 + Math.random() * 0.2) });
+    blobs.push({ x: cx + Math.cos(a) * d, y: cy + Math.sin(a) * d, r: maxR * (0.4 + Math.random() * 0.25) });
   }
 
   // ---- Peninsulas ----
@@ -137,7 +137,7 @@ function generateEarthMap(w, h) {
 
   // ---- Mountain ranges (curves) — scaled for map size ----
   const mapScale = w / 800; // scale factor relative to base 800px wide map
-  const rangeN = 3 + Math.floor(Math.random() * 4);
+  const rangeN = 5 + Math.floor(Math.random() * 5);
   const rangeMask = new Float32Array(w * h);
   for (let r = 0; r < rangeN; r++) {
     let rx = cx + (Math.random() - 0.5) * maxR * 1.2;
@@ -237,7 +237,7 @@ function generateEarthMap(w, h) {
   }
 
   // ---- Assign terrain ----
-  const LT = 0.2, SB = 0.05;
+  const LT = 0.10, SB = 0.03;
   let landCount = 0;
 
   for (let y = 0; y < h; y++) {
@@ -251,10 +251,10 @@ function generateEarthMap(w, h) {
 
       landCount++;
 
-      // Mountains
-      if (mtn > 0.5 || (mtn > 0.3 && elev > 0.3)) { map[i] = 4; landCount--; continue; }
-      // Hills
-      if (mtn > 0.15 || (elev > 0.35 && mtn > 0.05)) { map[i] = 8; continue; }
+      // Mountains — wider range, more of them (산맥)
+      if (mtn > 0.4 || (mtn > 0.25 && elev > 0.25)) { map[i] = 4; continue; }
+      // Hills — broader belt around mountains (구릉)
+      if (mtn > 0.10 || (elev > 0.28 && mtn > 0.03) || (elev > 0.4)) { map[i] = 8; continue; }
 
       // Resource zone check
       let zt2 = null;
@@ -262,20 +262,23 @@ function generateEarthMap(w, h) {
         if ((x-z.x)**2 + (y-z.y)**2 < z.r * z.r) { zt2 = z.type; break; }
       }
 
-      // Biomes
-      if (temp < 0.25) {
-        if (temp < 0.1) { map[i] = 6; landCount--; } // ice
-        else map[i] = 5; // tundra
-      } else if (temp > 0.75 && moist < 0.1) {
-        map[i] = 3; // desert
-      } else if (moist > 0.4) {
-        if (moist > 0.65 && elev < -0.1 && temp > 0.55) map[i] = 9; // swamp
-        else map[i] = 2; // forest
-      } else if (moist > 0.15) {
+      // Biomes — balanced thresholds for terrain diversity
+      if (temp < 0.30) {
+        if (temp < 0.12) { map[i] = 6; landCount--; } // ice (빙하)
+        else map[i] = 5; // tundra (툰드라)
+      } else if (temp > 0.72 && moist < 0.12) {
+        map[i] = 3; // desert (사막) — hot + dry
+      } else if (moist > 0.45 && temp > 0.38) {
+        if (elev < 0.08) map[i] = 9; // swamp (늪지) — wet lowland
+        else map[i] = 2; // forest (숲) — wet highland
+      } else if (moist > 0.25) {
+        map[i] = 2; // forest (숲) — moderate moisture
+      } else if (moist > 0.08) {
         if (zt2 === 'quarry') map[i] = 8; // hilly quarry
-        else map[i] = 1; // plains
+        else if (temp > 0.68 && moist < 0.15) map[i] = 3; // semi-arid desert
+        else map[i] = 1; // plains (평원)
       } else {
-        map[i] = temp > 0.5 ? 3 : 1; // desert or dry plains
+        map[i] = temp > 0.58 ? 3 : 1; // desert or dry plains
       }
     }
   }
@@ -317,8 +320,8 @@ function generateEarthMap(w, h) {
       const i = y * w + x;
       if (map[i] !== 0) continue;
       let near = false;
-      outer: for (let dy = -2; dy <= 2; dy++) {
-        for (let dx = -2; dx <= 2; dx++) {
+      outer: for (let dy = -3; dy <= 3; dy++) {
+        for (let dx = -3; dx <= 3; dx++) {
           const nx = x + dx, ny = y + dy;
           if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
             const t = map[ny * w + nx];
