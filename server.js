@@ -1,5 +1,4 @@
-// ===== Territory.io v4 — Persistent Strategy Server =====
-// Rise of Kingdoms + OpenFront inspired: Resources, Buildings, Tech, Barbarians, Persistence
+// ===== Territory.io v5 — Persistent Strategy Server =====
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -7,29 +6,92 @@ const path = require('path');
 const fs = require('fs');
 const { generateEarthMap } = require('./worldmap');
 
+let session;
+try { session = require('express-session'); } catch(e) { session = null; }
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { maxHttpBufferSize: 2e6 });
+
+// Session setup (for Discord OAuth2)
+if (session) {
+  app.use(session({
+    secret: process.env.SESSION_SECRET || 'territory-io-secret-key',
+    resave: false, saveUninitialized: false,
+    cookie: { maxAge: 7 * 24 * 60 * 60 * 1000 }
+  }));
+}
+
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ===== DISCORD OAUTH2 =====
+const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
+const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
+const DISCORD_REDIRECT = process.env.DISCORD_REDIRECT || 'http://localhost:3000/auth/discord/callback';
+const discordEnabled = !!(DISCORD_CLIENT_ID && DISCORD_CLIENT_SECRET);
+
+if (discordEnabled) {
+  app.get('/auth/discord', (req, res) => {
+    const url = `https://discord.com/api/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&redirect_uri=${encodeURIComponent(DISCORD_REDIRECT)}&response_type=code&scope=identify`;
+    res.redirect(url);
+  });
+  app.get('/auth/discord/callback', async (req, res) => {
+    const code = req.query.code;
+    if (!code) return res.redirect('/');
+    try {
+      const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
+        method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ client_id: DISCORD_CLIENT_ID, client_secret: DISCORD_CLIENT_SECRET,
+          grant_type: 'authorization_code', code, redirect_uri: DISCORD_REDIRECT })
+      });
+      const tokens = await tokenRes.json();
+      const userRes = await fetch('https://discord.com/api/users/@me', {
+        headers: { Authorization: `Bearer ${tokens.access_token}` }
+      });
+      const user = await userRes.json();
+      if (req.session) {
+        req.session.discordUser = {
+          id: user.id, displayName: user.global_name || user.username,
+          avatar: user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png` : null
+        };
+      }
+    } catch(e) { console.error('Discord OAuth error:', e.message); }
+    res.redirect('/');
+  });
+  app.get('/auth/logout', (req, res) => {
+    if (req.session) req.session.destroy();
+    res.redirect('/');
+  });
+}
+app.get('/auth/me', (req, res) => {
+  res.json({ user: req.session?.discordUser || null, discordEnabled });
+});
+
 // ===== CONFIG =====
-const W = 800, H = 400, CELLS = W * H;
+const W = 2000, H = 1000, CELLS = W * H;
 const CHUNK = 40;
 const CX = W / CHUNK, CY = H / CHUNK;
-const TICK = 200;            // ms per game tick
-const RES_INTERVAL = 60000;  // resource gather every 60s
-const TROOP_INTERVAL = 20000;// troop gen every 20s (slow for longevity)
+const TICK = 200;
+const RES_INTERVAL = 60000;
+const TROOP_INTERVAL = 20000;
 const BOT_INTERVAL = 4000;
 const LB_INTERVAL = 3000;
-const STATE_INTERVAL = 5000; // send player state every 5s
-const SAVE_INTERVAL = 120000;// auto-save every 2 min
+const STATE_INTERVAL = 5000;
+const SAVE_INTERVAL = 120000;
 const BARB_SPAWN_INTERVAL = 45000;
 const AP_REGEN_INTERVAL = 20000;
 const BOT_N = 10;
-const MAX_BARBS = 20;
-const MAX_TROOP_BASE = 30;
-const DEFENSE = [0, 1.0, 1.3, 0.9, 99, 1.1, 99, 0, 1.5, 0.8]; // per terrain (8=hills def+50%, 9=swamp def-20%)
+const MAX_BARBS = 60;
+const DEFENSE = [0, 1.0, 1.3, 0.9, 99, 1.1, 99, 0, 1.5, 0.8];
 const SAVE_FILE = path.join(__dirname, 'gamestate.json');
+
+// ===== CAMP TYPES =====
+const CAMP_TYPES = [
+  { name: 'scout', size: 1, troops: 15, reward: { food: 80, wood: 80, stone: 30, gold: 20 } },
+  { name: 'village', size: 2, troops: 35, reward: { food: 200, wood: 200, stone: 80, gold: 50 } },
+  { name: 'fortress', size: 3, troops: 70, reward: { food: 500, wood: 500, stone: 200, gold: 120 } },
+  { name: 'citadel', size: 4, troops: 130, reward: { food: 1200, wood: 1200, stone: 500, gold: 300 } },
+];
 
 // ===== BUILDING DEFINITIONS =====
 const BLDG = {
@@ -53,14 +115,14 @@ const TECH = {
 
 // ===== MAP DATA =====
 let terrain;
-const owner = new Int16Array(CELLS);  // -1=none, -2=barbarian, >=0 player
+const owner = new Int16Array(CELLS);
 const troops = new Uint16Array(CELLS);
 owner.fill(-1);
 
 // ===== PLAYER DATA =====
-let players = [];       // [{id,name,color,alive,isBot,clanId,offline, capital, resources, buildings, tech, ap, maxAp, protection, spawnTime}]
-let pidMap = {};        // socketId/botId -> player index
-let playerCells = [];   // [Set<flatIndex>] per player
+let players = [];
+let pidMap = {};
+let playerCells = [];
 let nextColor = 0;
 
 const COLORS = [
@@ -70,11 +132,8 @@ const COLORS = [
   '#ff6b6b','#48dbfb','#ff9ff3','#10ac84','#ee5a24','#0abde3'
 ];
 
-// ===== CLAN DATA =====
 let clans = [];
-// ===== BARBARIANS =====
-let barbs = []; // {x, y, troops, level, spawnTime}
-// ===== DIRTY CHUNKS =====
+let barbs = [];
 const dirtyChunks = new Set();
 
 function markDirty(x, y) { dirtyChunks.add(`${Math.floor(x/CHUNK)},${Math.floor(y/CHUNK)}`); }
@@ -82,7 +141,6 @@ function idx(x, y) { return y * W + x; }
 function validCell(x, y) { return x >= 0 && y >= 0 && x < W && y < H; }
 function isPlayable(t) { return t === 1 || t === 2 || t === 3 || t === 5 || t === 8 || t === 9; }
 
-// ===== CELL HELPERS =====
 function claimCell(pi, x, y) {
   const i = idx(x, y);
   const prev = owner[i];
@@ -103,10 +161,9 @@ function releaseCell(x, y) {
   markDirty(x, y);
 }
 
-// ===== BUILDING/TECH COST HELPERS =====
+// ===== COST HELPERS =====
 function bldgCost(key, level) {
-  const def = BLDG[key];
-  const costs = {};
+  const def = BLDG[key]; const costs = {};
   for (const [r, v] of Object.entries(def.base)) costs[r] = Math.ceil(v * Math.pow(1.3, level));
   return costs;
 }
@@ -116,8 +173,7 @@ function bldgTime(key, level, p) {
   return Math.ceil(base * Math.pow(level + 1, 2) * Math.max(0.3, acadBonus));
 }
 function techCost(key, level) {
-  const def = TECH[key];
-  const costs = {};
+  const def = TECH[key]; const costs = {};
   for (const [r, v] of Object.entries(def.base)) costs[r] = Math.ceil(v * Math.pow(1.25, level));
   return costs;
 }
@@ -135,25 +191,26 @@ function payCost(p, costs) {
   const m = { f:'food', w:'wood', s:'stone', g:'gold' };
   for (const [k, v] of Object.entries(costs)) p.resources[m[k]] -= v;
 }
+
+// ===== SNOWBALL MECHANICS =====
 function maxTroops(pi) {
   if (pi < 0 || !players[pi]) return 50;
   const cells = playerCells[pi]?.size || 1;
-  return 50 + (players[pi].buildings.hq?.l || 0) * 20 + cells * 2;
-}
-function attackPower(pi) { return 1 + (players[pi]?.tech?.atk?.l || 0) * 0.08; }
-function defensePower(pi) { return 1 + (players[pi]?.tech?.def?.l || 0) * 0.08; }
-function isProtected(pi) {
-  return players[pi] && players[pi].protection > Date.now();
+  const hqLv = players[pi].buildings.hq?.l || 0;
+  return 50 + hqLv * 25 + cells * 3 + Math.floor(Math.sqrt(cells) * 5);
 }
 
-// ===== TERRAIN RESOURCE YIELD =====
+function attackPower(pi) { return 1 + (players[pi]?.tech?.atk?.l || 0) * 0.08; }
+function defensePower(pi) { return 1 + (players[pi]?.tech?.def?.l || 0) * 0.08; }
+function isProtected(pi) { return players[pi] && players[pi].protection > Date.now(); }
+
 function terrainResources(t) {
-  if (t === 1) return { food: 2, wood: 0, stone: 0, gold: 0 };  // plains
-  if (t === 2) return { food: 1, wood: 2, stone: 0, gold: 0 };  // forest
-  if (t === 3) return { food: 0, wood: 0, stone: 0, gold: 1 };  // desert (gold)
-  if (t === 5) return { food: 0, wood: 1, stone: 1, gold: 0 };  // tundra
-  if (t === 8) return { food: 0, wood: 0, stone: 2, gold: 1 };  // hills (stone+gold)
-  if (t === 9) return { food: 3, wood: 1, stone: 0, gold: 0 };  // swamp (high food)
+  if (t === 1) return { food: 2, wood: 0, stone: 0, gold: 0 };
+  if (t === 2) return { food: 1, wood: 2, stone: 0, gold: 0 };
+  if (t === 3) return { food: 0, wood: 0, stone: 0, gold: 1 };
+  if (t === 5) return { food: 0, wood: 1, stone: 1, gold: 0 };
+  if (t === 8) return { food: 0, wood: 0, stone: 2, gold: 1 };
+  if (t === 9) return { food: 3, wood: 1, stone: 0, gold: 0 };
   return { food: 0, wood: 0, stone: 0, gold: 0 };
 }
 
@@ -161,7 +218,7 @@ function terrainResources(t) {
 function initBuildings() {
   const b = {};
   for (const k of Object.keys(BLDG)) b[k] = { l: 0, e: 0 };
-  b.hq.l = 1; // Start with HQ level 1
+  b.hq.l = 1;
   return b;
 }
 function initTech() {
@@ -171,45 +228,58 @@ function initTech() {
 }
 function initResources() { return { food: 500, wood: 500, stone: 200, gold: 100 }; }
 
-// ===== SPAWN =====
-function findSpawn() {
-  for (let attempt = 0; attempt < 800; attempt++) {
-    const x = 10 + Math.floor(Math.random() * (W - 20));
-    const y = 10 + Math.floor(Math.random() * (H - 20));
-    if (!isPlayable(terrain[idx(x, y)])) continue;
-    if (owner[idx(x, y)] >= 0) continue;
-    let ok = true;
-    for (let dy = -1; dy <= 1 && ok; dy++)
-      for (let dx = -1; dx <= 1 && ok; dx++) {
-        const nx = x+dx, ny = y+dy;
-        if (!validCell(nx,ny) || !isPlayable(terrain[idx(nx,ny)]) || owner[idx(nx,ny)] >= 0) ok = false;
-      }
-    if (ok) return { x, y };
+// ===== SPAWN WITH PREFERRED LOCATION =====
+function findSpawn(prefX, prefY) {
+  const cx = prefX != null ? prefX : Math.floor(W / 2);
+  const cy = prefY != null ? prefY : Math.floor(H / 2);
+  // Spiral search around preferred location
+  for (let r = 0; r < Math.max(W, H); r += 5) {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const angle = Math.random() * Math.PI * 2;
+      const x = Math.floor(cx + Math.cos(angle) * r);
+      const y = Math.floor(cy + Math.sin(angle) * r);
+      if (x < 10 || y < 10 || x >= W - 10 || y >= H - 10) continue;
+      if (!isPlayable(terrain[idx(x, y)])) continue;
+      if (owner[idx(x, y)] >= 0) continue;
+      let ok = true;
+      for (let dy = -1; dy <= 1 && ok; dy++)
+        for (let dx = -1; dx <= 1 && ok; dx++) {
+          const nx = x+dx, ny = y+dy;
+          if (!validCell(nx,ny) || !isPlayable(terrain[idx(nx,ny)]) || owner[idx(nx,ny)] >= 0) ok = false;
+        }
+      if (ok) return { x, y };
+    }
   }
+  // Fallback
   for (let y = 10; y < H-10; y++)
     for (let x = 10; x < W-10; x++)
       if (isPlayable(terrain[idx(x,y)]) && owner[idx(x,y)] < 0) return {x,y};
   return { x: W/2|0, y: H/2|0 };
 }
 
-function spawnPlayer(id, name, isBot = false) {
+function spawnPlayer(id, name, isBot = false, discordId = null) {
   const pi = players.length;
   const color = COLORS[nextColor++ % COLORS.length];
   const now = Date.now();
   players.push({
     id, name, color, alive: true, isBot, clanId: -1, offline: false,
+    discordId: discordId || null,
     capital: null,
     resources: initResources(),
     buildings: initBuildings(),
     tech: initTech(),
     ap: 50, maxAp: 55,
     totalTroops: 50,
-    protection: isBot ? 0 : now + 8 * 3600 * 1000,
+    protection: isBot ? 0 : now + 2 * 3600 * 1000,
     spawnTime: now,
   });
   pidMap[id] = pi;
   playerCells[pi] = new Set();
-  const pos = findSpawn();
+  return pi;
+}
+
+function placePlayerAt(pi, prefX, prefY) {
+  const pos = findSpawn(prefX, prefY);
   players[pi].capital = { x: pos.x, y: pos.y };
   claimCell(pi, pos.x, pos.y);
   for (let dy = -1; dy <= 1; dy++)
@@ -222,7 +292,7 @@ function spawnPlayer(id, name, isBot = false) {
   return pos;
 }
 
-function respawnPlayer(pi) {
+function respawnPlayer(pi, prefX, prefY) {
   if (playerCells[pi]) {
     for (const i of playerCells[pi]) {
       owner[i] = -1; troops[i] = 0;
@@ -236,18 +306,8 @@ function respawnPlayer(pi) {
   players[pi].tech = initTech();
   players[pi].ap = 50;
   players[pi].totalTroops = 50;
-  players[pi].protection = Date.now() + 8 * 3600 * 1000;
-  const pos = findSpawn();
-  players[pi].capital = { x: pos.x, y: pos.y };
-  claimCell(pi, pos.x, pos.y);
-  for (let dy = -1; dy <= 1; dy++)
-    for (let dx = -1; dx <= 1; dx++) {
-      if (dx === 0 && dy === 0) continue;
-      const nx = pos.x+dx, ny = pos.y+dy;
-      if (validCell(nx,ny) && isPlayable(terrain[idx(nx,ny)]) && owner[idx(nx,ny)] < 0)
-        claimCell(pi, nx, ny);
-    }
-  return pos;
+  players[pi].protection = Date.now() + 2 * 3600 * 1000;
+  return placePlayerAt(pi, prefX, prefY);
 }
 
 function removePlayer(pi) {
@@ -273,7 +333,6 @@ function gatherResources() {
     const farmB = 1 + (p.buildings.farm?.l || 0) * 0.12;
     const lumB = 1 + (p.buildings.lum?.l || 0) * 0.12;
     const qryB = 1 + (p.buildings.qry?.l || 0) * 0.12;
-    const mktB = 1; // no market building anymore, use tech
     const gthB = 1 + (p.tech.gth?.l || 0) * 0.05;
     const offlinePenalty = p.offline ? 0.3 : 1;
     for (const i of playerCells[pi]) {
@@ -281,9 +340,8 @@ function gatherResources() {
       p.resources.food  += tr.food  * farmB * gthB * offlinePenalty;
       p.resources.wood  += tr.wood  * lumB  * gthB * offlinePenalty;
       p.resources.stone += tr.stone * qryB  * gthB * offlinePenalty;
-      p.resources.gold  += tr.gold  * mktB  * gthB * offlinePenalty;
+      p.resources.gold  += tr.gold  * gthB * offlinePenalty;
     }
-    // Cap resources
     const cap = 5000 + (p.buildings.hq?.l || 0) * 2000;
     p.resources.food = Math.min(p.resources.food, cap);
     p.resources.wood = Math.min(p.resources.wood, cap);
@@ -292,17 +350,19 @@ function gatherResources() {
   }
 }
 
-// ===== TROOP GENERATION =====
+// ===== SNOWBALL TROOP GEN =====
 function genTroops() {
   for (let pi = 0; pi < players.length; pi++) {
     const p = players[pi];
     if (!p?.alive || !playerCells[pi]) continue;
     const barBonus = 1 + (p.buildings.bar?.l || 0) * 0.1;
-    const offlinePenalty = p.offline ? 0.5 : 1;
-    const foodCost = playerCells[pi].size * 0.1;
+    const offlinePenalty = p.offline ? 0.4 : 1;
+    const cells = playerCells[pi].size;
+    const foodCost = cells * 0.1;
     if (p.resources.food < foodCost) continue;
     p.resources.food -= foodCost;
-    const gen = Math.max(1, Math.floor(playerCells[pi].size * 0.5 * barBonus * offlinePenalty));
+    const base = Math.max(2, Math.floor(Math.sqrt(cells) * 1.5));
+    const gen = Math.floor(base * barBonus * offlinePenalty);
     const mt = maxTroops(pi);
     p.totalTroops = Math.min((p.totalTroops || 0) + gen, mt);
   }
@@ -314,18 +374,10 @@ function checkBuildings() {
   for (const p of players) {
     if (!p?.alive) continue;
     for (const [k, b] of Object.entries(p.buildings)) {
-      if (b.e > 0 && now >= b.e) {
-        b.l++;
-        b.e = 0;
-        // Recalc derived stats
-        if (k === 'hq') p.maxAp = 50 + b.l * 5;
-      }
+      if (b.e > 0 && now >= b.e) { b.l++; b.e = 0; if (k === 'hq') p.maxAp = 50 + b.l * 5; }
     }
     for (const [k, t] of Object.entries(p.tech)) {
-      if (t.e > 0 && now >= t.e) {
-        t.l++;
-        t.e = 0;
-      }
+      if (t.e > 0 && now >= t.e) { t.l++; t.e = 0; }
     }
   }
 }
@@ -336,17 +388,11 @@ function areAllies(pi1, pi2) {
   const c1 = players[pi1]?.clanId, c2 = players[pi2]?.clanId;
   return c1 >= 0 && c1 === c2;
 }
-
 function terrainExpandCost(t) {
-  if (t === 1) return 2;  // plains
-  if (t === 2) return 3;  // forest
-  if (t === 3) return 3;  // desert
-  if (t === 5) return 4;  // tundra
-  if (t === 8) return 4;  // hills (hard to take but defensible)
-  if (t === 9) return 3;  // swamp
+  if (t === 1) return 2; if (t === 2) return 3; if (t === 3) return 3;
+  if (t === 5) return 4; if (t === 8) return 4; if (t === 9) return 3;
   return 2;
 }
-
 function isAdjacentTo(pi, x, y) {
   for (let dy = -1; dy <= 1; dy++)
     for (let dx = -1; dx <= 1; dx++) {
@@ -365,7 +411,7 @@ function expandCell(pi, tx, ty) {
   if (!isAdjacentTo(pi, tx, ty)) return { ok: false, msg: '인접한 영토가 없습니다' };
   const p = players[pi];
 
-  // Unclaimed land
+  // Unclaimed
   if (owner[ti] === -1) {
     const cost = terrainExpandCost(terrain[ti]);
     if ((p.totalTroops || 0) < cost) return { ok: false, msg: '병력 부족' };
@@ -374,27 +420,18 @@ function expandCell(pi, tx, ty) {
     return { ok: true };
   }
 
-  // Barbarian
+  // Barbarian camp
   if (owner[ti] === -2) {
     const barbTr = troops[ti];
     const atkCost = Math.ceil(barbTr * 1.5 / attackPower(pi));
     if ((p.totalTroops || 0) < atkCost) return { ok: false, msg: '병력 부족' };
     p.totalTroops -= Math.ceil(atkCost * 0.7);
-    const bIdx = barbs.findIndex(b => b.x === tx && b.y === ty);
-    if (bIdx >= 0) {
-      const bLevel = barbs[bIdx].level;
-      const reward = { food: 50+bLevel*40, wood: 50+bLevel*40, stone: 20+bLevel*15, gold: 10+bLevel*10 };
-      p.resources.food += reward.food; p.resources.wood += reward.wood;
-      p.resources.stone += reward.stone; p.resources.gold += reward.gold;
-      barbs.splice(bIdx, 1);
-      const sock = findSocket(pi);
-      if (sock) sock.emit('reward', reward);
-    }
     claimCell(pi, tx, ty);
+    checkCampClear(pi, tx, ty);
     return { ok: true };
   }
 
-  // Enemy player
+  // Enemy player — PvP plunder
   const to = owner[ti];
   if (areAllies(pi, to)) return { ok: false, msg: '동맹 영토' };
   if (isProtected(to)) return { ok: false, msg: '보호막 활성화' };
@@ -411,7 +448,28 @@ function expandCell(pi, tx, ty) {
   if ((p.totalTroops || 0) < defCost) return { ok: false, msg: '병력 부족' };
   p.totalTroops -= defCost;
   enemy.totalTroops = Math.max(0, (enemy.totalTroops || 0) - Math.ceil(defCost * 0.4));
+
+  // PvP plunder: steal 30% of 50% of enemy resources per cell fraction
+  const plunderFrac = 0.15 / Math.max(1, enemyCells);
+  p.resources.food += Math.floor(enemy.resources.food * plunderFrac);
+  p.resources.wood += Math.floor(enemy.resources.wood * plunderFrac);
+  p.resources.stone += Math.floor(enemy.resources.stone * plunderFrac);
+  p.resources.gold += Math.floor(enemy.resources.gold * plunderFrac);
+
   claimCell(pi, tx, ty);
+
+  // Capital kill bonus
+  if (enemy.capital && tx === enemy.capital.x && ty === enemy.capital.y) {
+    const killBonus = { food: Math.floor(enemy.resources.food * 0.3), wood: Math.floor(enemy.resources.wood * 0.3),
+      stone: Math.floor(enemy.resources.stone * 0.3), gold: Math.floor(enemy.resources.gold * 0.3),
+      troops: Math.floor((enemy.totalTroops || 0) * 0.2) };
+    p.resources.food += killBonus.food; p.resources.wood += killBonus.wood;
+    p.resources.stone += killBonus.stone; p.resources.gold += killBonus.gold;
+    p.totalTroops = Math.min((p.totalTroops || 0) + killBonus.troops, maxTroops(pi));
+    const sock = findSocket(pi);
+    if (sock) sock.emit('reward', killBonus);
+  }
+
   checkDeath(to);
   return { ok: true };
 }
@@ -438,10 +496,7 @@ function borderPush(pi) {
   p.totalTroops -= totalCost;
   p.ap -= apCost;
   let claimed = 0;
-  for (const ni of targets) {
-    claimCell(pi, ni % W, (ni / W) | 0);
-    claimed++;
-  }
+  for (const ni of targets) { claimCell(pi, ni % W, (ni / W) | 0); claimed++; }
   return claimed;
 }
 
@@ -450,14 +505,11 @@ function massiveAttack(pi, targetX, targetY) {
   if (!p?.alive || !playerCells[pi]) return 0;
   if ((p.totalTroops || 0) < 30 || p.ap < 10) return 0;
   const investTroops = Math.floor(p.totalTroops * 0.25);
-  p.totalTroops -= investTroops;
-  p.ap -= 10;
-  let remaining = investTroops;
-  let claimed = 0;
+  p.totalTroops -= investTroops; p.ap -= 10;
+  let remaining = investTroops, claimed = 0;
   const maxCells = Math.min(30, Math.floor(investTroops / 2));
   const visited = new Set();
   const queue = [];
-  // Find border cells closest to target
   const borders = [];
   for (const i of playerCells[pi]) {
     const x = i % W, y = (i / W) | 0;
@@ -487,9 +539,7 @@ function massiveAttack(pi, targetX, targetY) {
   while (queue.length > 0 && claimed < maxCells && remaining > 0) {
     const { x, y } = queue.shift();
     const ti = idx(x, y);
-    if (owner[ti] === pi) continue;
-    if (!isPlayable(terrain[ti])) continue;
-    if (!isAdjacentTo(pi, x, y)) continue;
+    if (owner[ti] === pi || !isPlayable(terrain[ti]) || !isAdjacentTo(pi, x, y)) continue;
     let cost = 3;
     const to = owner[ti];
     if (to >= 0) {
@@ -503,8 +553,6 @@ function massiveAttack(pi, targetX, targetY) {
     } else if (to === -2) {
       cost = Math.ceil(troops[ti] * 1.2);
       if (remaining < cost) continue;
-      const bIdx = barbs.findIndex(b => b.x === x && b.y === y);
-      if (bIdx >= 0) barbs.splice(bIdx, 1);
     }
     remaining -= cost;
     claimCell(pi, x, y);
@@ -529,9 +577,7 @@ function checkDeath(pi) {
   if (!playerCells[pi] || playerCells[pi].size === 0) {
     players[pi].alive = false;
     if (players[pi].isBot) {
-      setTimeout(() => {
-        if (players[pi]) respawnPlayer(pi);
-      }, 10000);
+      setTimeout(() => { if (players[pi]) respawnPlayer(pi); }, 10000);
     } else {
       const sock = findSocket(pi);
       if (sock) sock.emit('died');
@@ -558,9 +604,7 @@ function createClan(pi, name, tag) {
 function joinClan(pi, ci) {
   if (ci < 0 || ci >= clans.length || !clans[ci]) return false;
   if (players[pi].clanId >= 0) leaveClan(pi);
-  clans[ci].members.add(pi);
-  players[pi].clanId = ci;
-  players[pi].color = clans[ci].color;
+  clans[ci].members.add(pi); players[pi].clanId = ci; players[pi].color = clans[ci].color;
   return true;
 }
 function leaveClan(pi) {
@@ -571,44 +615,66 @@ function leaveClan(pi) {
   else if (clans[ci].leaderId === pi) clans[ci].leaderId = [...clans[ci].members][0];
   players[pi].clanId = -1;
 }
-function clanList() {
+function clanListData() {
   return clans.filter(c => c).map((c,i) => ({
     id: i, name: c.name, tag: c.tag, color: c.color,
-    members: c.members.size, leader: players[c.leaderId]?.name || '?'
+    members: c.members.size, leader: players[c.leaderId]?.name || '?',
+    cells: [...c.members].reduce((s,m)=>(s+(playerCells[m]?.size||0)),0)
   }));
 }
 
-// ===== BARBARIANS =====
-function spawnBarb() {
+// ===== MULTI-CELL BARBARIAN CAMPS =====
+function spawnCamp() {
   if (barbs.length >= MAX_BARBS) return;
-  for (let i = 0; i < 300; i++) {
-    const x = Math.floor(Math.random() * W);
-    const y = Math.floor(Math.random() * H);
-    const ii = idx(x, y);
-    if (isPlayable(terrain[ii]) && owner[ii] < 0) {
-      const level = 1;
-      const tr = 10 + level * 8;
-      barbs.push({ x, y, troops: tr, level, spawnTime: Date.now() });
-      owner[ii] = -2;
-      troops[ii] = tr;
-      markDirty(x, y);
-      return;
+  const typeIdx = Math.random() < 0.5 ? 0 : Math.random() < 0.6 ? 1 : Math.random() < 0.7 ? 2 : 3;
+  const ct = CAMP_TYPES[typeIdx];
+  for (let attempt = 0; attempt < 500; attempt++) {
+    const cx = 10 + Math.floor(Math.random() * (W - 20));
+    const cy = 10 + Math.floor(Math.random() * (H - 20));
+    // Check all cells for camp
+    let ok = true;
+    const cells = [];
+    for (let dy = 0; dy < ct.size && ok; dy++)
+      for (let dx = 0; dx < ct.size && ok; dx++) {
+        const x = cx + dx, y = cy + dy;
+        if (!validCell(x, y) || !isPlayable(terrain[idx(x, y)]) || owner[idx(x, y)] !== -1) ok = false;
+        else cells.push({ x, y });
+      }
+    if (!ok) continue;
+    const camp = { cx, cy, type: typeIdx, cells: cells.map(c => ({ x: c.x, y: c.y })), troops: ct.troops, spawnTime: Date.now() };
+    barbs.push(camp);
+    for (const c of cells) {
+      const i = idx(c.x, c.y);
+      owner[i] = -2; troops[i] = ct.troops;
+      markDirty(c.x, c.y);
+    }
+    return;
+  }
+}
+
+function checkCampClear(pi, tx, ty) {
+  for (let bi = barbs.length - 1; bi >= 0; bi--) {
+    const camp = barbs[bi];
+    const allCleared = camp.cells.every(c => owner[idx(c.x, c.y)] !== -2);
+    if (allCleared) {
+      const ct = CAMP_TYPES[camp.type];
+      const reward = { ...ct.reward };
+      const p = players[pi];
+      p.resources.food += reward.food; p.resources.wood += reward.wood;
+      p.resources.stone += reward.stone; p.resources.gold += reward.gold;
+      const troopReward = Math.floor(ct.troops * 0.3);
+      reward.troops = troopReward;
+      p.totalTroops = Math.min((p.totalTroops || 0) + troopReward, maxTroops(pi));
+      const sock = findSocket(pi);
+      if (sock) sock.emit('reward', reward);
+      barbs.splice(bi, 1);
     }
   }
 }
-function updateBarbs() {
-  const now = Date.now();
-  // Level up existing barbs
-  for (const b of barbs) {
-    if (b.level < 5 && now - b.spawnTime > 300000 * b.level) {
-      b.level++;
-      b.troops = 10 + b.level * 8;
-      const i = idx(b.x, b.y);
-      if (owner[i] === -2) { troops[i] = b.troops; markDirty(b.x, b.y); }
-    }
-  }
-  // Remove barbs whose cells were taken
-  barbs = barbs.filter(b => owner[idx(b.x, b.y)] === -2);
+
+function updateCamps() {
+  // Remove camps whose cells were all taken
+  barbs = barbs.filter(camp => camp.cells.some(c => owner[idx(c.x, c.y)] === -2));
 }
 
 // ===== AP REGEN =====
@@ -620,18 +686,37 @@ function regenAP() {
   }
 }
 
+// ===== TERRAIN PREVIEW =====
+function buildTerrainPreview() {
+  const scale = 5;
+  const pw = Math.ceil(W / scale), ph = Math.ceil(H / scale);
+  const t = new Uint8Array(pw * ph);
+  const o = new Uint8Array(pw * ph); // 0=empty, 1=player, 2=barb
+  for (let py = 0; py < ph; py++)
+    for (let px = 0; px < pw; px++) {
+      const gx = px * scale, gy = py * scale;
+      if (gx < W && gy < H) {
+        t[py * pw + px] = terrain[idx(gx, gy)];
+        const ow = owner[idx(gx, gy)];
+        o[py * pw + px] = ow >= 0 ? 1 : ow === -2 ? 2 : 0;
+      }
+    }
+  return { w: pw, h: ph, t: Array.from(t), o: Array.from(o) };
+}
+
 // ===== BOT AI =====
 const BOT_NAMES = [
-  'Roman Empire','Mongol Horde','British Empire','Ottoman Empire',
-  'Ming Dynasty','Viking Raiders','Persian Empire','Zulu Nation',
-  'Aztec Empire','Greek Alliance'
+  'Roman Empire','Mongol Horde','British Empire','Ottoman Empire','Ming Dynasty',
+  'Viking Raiders','Persian Empire','Zulu Nation','Aztec Empire','Greek Alliance',
+  'Egyptian Dynasty','Spartan Legion','Samurai Shogun','Inca Empire','Mayan Realm',
+  'Celtic Tribes','Babylonian Kingdom','Carthage Republic','Khmer Empire','Joseon Dynasty'
 ];
 
 function spawnBots() {
   for (let i = 0; i < BOT_N; i++) {
-    spawnPlayer(`bot_${i}`, BOT_NAMES[i % BOT_NAMES.length], true);
+    const pi = spawnPlayer(`bot_${i}`, BOT_NAMES[i % BOT_NAMES.length], true);
+    placePlayerAt(pi, null, null);
   }
-  // Pair bots into clans
   for (let i = 0; i < BOT_N - 1; i += 3) {
     const ci = createClan(i, BOT_NAMES[i].split(' ')[0]+' Alliance', BOT_NAMES[i].slice(0,3).toUpperCase());
     if (i+1 < BOT_N) joinClan(i+1, ci);
@@ -641,8 +726,6 @@ function spawnBots() {
 function botAI(pi) {
   const p = players[pi];
   if (!p?.alive || !playerCells[pi] || playerCells[pi].size === 0) return;
-
-  // Bot auto-upgrade buildings
   const now = Date.now();
   const upgrading = Object.values(p.buildings).some(b => b.e > 0);
   if (!upgrading) {
@@ -651,38 +734,20 @@ function botAI(pi) {
       if (b.l >= BLDG_MAX) continue;
       if (k !== 'hq' && b.l >= p.buildings.hq.l) continue;
       const cost = bldgCost(k, b.l);
-      if (canAfford(p, cost)) {
-        payCost(p, cost);
-        b.e = now + bldgTime(k, b.l, p) * 1000;
-        break;
-      }
+      if (canAfford(p, cost)) { payCost(p, cost); b.e = now + bldgTime(k, b.l, p) * 1000; break; }
     }
   }
-  // Bot auto-research
   const researching = Object.values(p.tech).some(t => t.e > 0);
   if (!researching) {
     for (const k of ['atk','def','gth','spd']) {
       const t = p.tech[k];
       if (t.l >= TECH[k].max) continue;
       const cost = techCost(k, t.l);
-      if (canAfford(p, cost)) {
-        payCost(p, cost);
-        t.e = now + techTime(k, t.l, p) * 1000;
-        break;
-      }
+      if (canAfford(p, cost)) { payCost(p, cost); t.e = now + techTime(k, t.l, p) * 1000; break; }
     }
   }
-
-  // Bot expand/attack AI
   if (p.ap < 2 || (p.totalTroops || 0) < 5) return;
-
-  // Try border push if enough troops
-  if ((p.totalTroops || 0) > 30 && p.ap > 10 && Math.random() < 0.3) {
-    borderPush(pi);
-    return;
-  }
-
-  // Find expandable cells
+  if ((p.totalTroops || 0) > 30 && p.ap > 10 && Math.random() < 0.3) { borderPush(pi); return; }
   const targets = [];
   let count = 0;
   for (const i of playerCells[pi]) {
@@ -696,8 +761,7 @@ function botAI(pi) {
         const ni = idx(nx, ny);
         if (!isPlayable(terrain[ni])) continue;
         if (owner[ni] !== pi && !areAllies(pi, owner[ni])) {
-          const priority = owner[ni] === -1 ? 10 : (owner[ni] === -2 ? 5 : 1);
-          targets.push({ x: nx, y: ny, priority });
+          targets.push({ x: nx, y: ny, priority: owner[ni] === -1 ? 10 : owner[ni] === -2 ? 5 : 1 });
           count++;
         }
       }
@@ -705,23 +769,19 @@ function botAI(pi) {
   if (targets.length === 0) return;
   targets.sort((a, b) => b.priority - a.priority);
   const n = Math.min(5, targets.length);
-  for (let i = 0; i < n && p.ap >= 1; i++) {
-    const t = targets[i];
-    p.ap--;
-    expandCell(pi, t.x, t.y);
-  }
+  for (let i = 0; i < n && p.ap >= 1; i++) { p.ap--; expandCell(pi, targets[i].x, targets[i].y); }
 }
 
 // ===== CHUNK PACKING =====
 function packChunk(cx, cy) {
   const sx = cx*CHUNK, sy = cy*CHUNK, n = CHUNK*CHUNK;
-  const t = new Uint8Array(n), o = new Int16Array(n), tr = new Uint16Array(n);
+  const t = new Uint8Array(n), o = new Int16Array(n);
   for (let ly = 0; ly < CHUNK; ly++)
     for (let lx = 0; lx < CHUNK; lx++) {
       const gi = idx(sx+lx, sy+ly), li = ly*CHUNK+lx;
-      t[li] = terrain[gi]; o[li] = owner[gi]; tr[li] = troops[gi];
+      t[li] = terrain[gi]; o[li] = owner[gi];
     }
-  return { cx, cy, t: Array.from(t), o: Array.from(o), tr: Array.from(tr) };
+  return { cx, cy, t: Array.from(t), o: Array.from(o) };
 }
 
 // ===== LEADERBOARD =====
@@ -731,9 +791,8 @@ function leaderboard() {
     if (!players[i]?.alive) continue;
     const cells = playerCells[i]?.size || 0;
     if (cells === 0) continue;
-    let tr = Math.floor(players[i].totalTroops || 0);
     const ct = players[i].clanId >= 0 && clans[players[i].clanId] ? `[${clans[players[i].clanId].tag}]` : '';
-    pLB.push({ i, name: players[i].name, color: players[i].color, cells, troops: tr, ct });
+    pLB.push({ i, name: players[i].name, color: players[i].color, cells, troops: Math.floor(players[i].totalTroops || 0), ct });
   }
   pLB.sort((a,b) => b.cells - a.cells);
   const cLB = [];
@@ -747,20 +806,16 @@ function leaderboard() {
   return { p: pLB.slice(0,15), c: cLB.slice(0,10) };
 }
 
-// ===== PLAYER STATE (resources, buildings, tech, AP) =====
 function playerState(pi) {
-  const p = players[pi];
-  if (!p) return null;
+  const p = players[pi]; if (!p) return null;
   return {
     r: { f: Math.floor(p.resources.food), w: Math.floor(p.resources.wood),
          s: Math.floor(p.resources.stone), g: Math.floor(p.resources.gold) },
     b: Object.fromEntries(Object.entries(p.buildings).map(([k,v]) => [k, {l:v.l, e:v.e}])),
     t: Object.fromEntries(Object.entries(p.tech).map(([k,v]) => [k, {l:v.l, e:v.e}])),
     ap: Math.floor(p.ap), ma: p.maxAp,
-    tt: Math.floor(p.totalTroops || 0),
-    mt: maxTroops(pi),
-    pr: p.protection,
-    cap: p.capital,
+    tt: Math.floor(p.totalTroops || 0), mt: maxTroops(pi),
+    pr: p.protection, cap: p.capital,
   };
 }
 
@@ -773,19 +828,13 @@ function saveGame() {
     }
     const state = {
       timestamp: Date.now(),
-      players: players.map(p => p ? {
-        ...p,
-        // Convert Sets aren't serializable
-      } : null),
+      players: players.map(p => p ? { ...p } : null),
       clans: clans.map(c => c ? { ...c, members: [...c.members] } : null),
-      ownedCells,
-      barbs,
-      nextColor,
+      ownedCells, barbs: barbs.map(b => ({ ...b })), nextColor,
     };
-    // Remove circular refs
-    state.players.forEach(p => { if (p) delete p.id; }); // Don't save socket ids
+    state.players.forEach(p => { if (p) delete p.id; });
     fs.writeFileSync(SAVE_FILE, JSON.stringify(state));
-    console.log(`[SAVE] Saved ${ownedCells.length} cells, ${players.filter(p=>p?.alive).length} alive players`);
+    console.log(`[SAVE] Saved ${ownedCells.length} cells, ${players.filter(p=>p?.alive).length} alive`);
   } catch (e) { console.error('Save error:', e.message); }
 }
 
@@ -794,54 +843,32 @@ function loadGame() {
     if (!fs.existsSync(SAVE_FILE)) return false;
     const state = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8'));
     console.log(`[LOAD] Loading save from ${new Date(state.timestamp).toLocaleString()}`);
-
-    // Restore players (without socket connections)
     players = state.players.map((p, i) => {
       if (!p) return null;
-      return {
-        ...p,
-        id: p.isBot ? `bot_${i}` : `offline_${i}`,
-        offline: !p.isBot,
-        alive: p.alive,
-      };
+      return { ...p, id: p.isBot ? `bot_${i}` : `offline_${i}`, offline: !p.isBot, alive: p.alive };
     });
-
-    // Restore clans
     clans = state.clans.map(c => c ? { ...c, members: new Set(c.members) } : null);
-
-    // Setup pidMap and playerCells
-    pidMap = {};
-    playerCells = players.map(() => new Set());
+    pidMap = {}; playerCells = players.map(() => new Set());
     players.forEach((p, i) => { if (p) pidMap[p.id] = i; });
-
-    // Restore cells
-    owner.fill(-1);
-    troops.fill(0);
+    owner.fill(-1); troops.fill(0);
     for (const [i, o, t] of state.ownedCells) {
-      owner[i] = o;
-      troops[i] = t;
-      if (o >= 0 && playerCells[o]) playerCells[o].add(i);
+      if (i < CELLS) { owner[i] = o; troops[i] = t; if (o >= 0 && playerCells[o]) playerCells[o].add(i); }
     }
-
-    // Restore barbs
     barbs = state.barbs || [];
     nextColor = state.nextColor || players.length;
-
-    // Complete any buildings/tech that should have finished
+    // Enhanced offline progression (up to 8 hours)
     const now = Date.now();
     const elapsed = now - state.timestamp;
     for (const p of players) {
       if (!p) continue;
-      for (const b of Object.values(p.buildings)) {
-        if (b.e > 0 && now >= b.e) { b.l++; b.e = 0; }
-      }
-      for (const t of Object.values(p.tech)) {
-        if (t.e > 0 && now >= t.e) { t.l++; t.e = 0; }
-      }
-      // Generate resources for offline time
+      for (const b of Object.values(p.buildings)) { if (b.e > 0 && now >= b.e) { b.l++; b.e = 0; } }
+      for (const t of Object.values(p.tech)) { if (t.e > 0 && now >= t.e) { t.l++; t.e = 0; } }
       if (p.alive && !p.isBot) {
-        const cycles = Math.min(Math.floor(elapsed / RES_INTERVAL), 60); // max 1 hour of offline resources
-        const cells = playerCells[players.indexOf(p)];
+        const maxOffline = 8 * 3600 * 1000;
+        const offlineTime = Math.min(elapsed, maxOffline);
+        const cycles = Math.floor(offlineTime / RES_INTERVAL);
+        const pi2 = players.indexOf(p);
+        const cells = playerCells[pi2];
         if (cells) {
           for (let c = 0; c < cycles; c++) {
             for (const ci of cells) {
@@ -852,16 +879,19 @@ function loadGame() {
               p.resources.gold += tr.gold * 0.3;
             }
           }
+          // Offline troop gen
+          const troopCycles = Math.floor(offlineTime / TROOP_INTERVAL);
+          const base = Math.max(2, Math.floor(Math.sqrt(cells.size) * 1.5));
+          const barBonus = 1 + (p.buildings.bar?.l || 0) * 0.1;
+          for (let c = 0; c < troopCycles; c++) {
+            p.totalTroops = Math.min((p.totalTroops || 0) + Math.floor(base * barBonus * 0.4), maxTroops(pi2));
+          }
         }
       }
     }
-
     console.log(`[LOAD] Restored ${players.filter(p=>p?.alive).length} players, ${state.ownedCells.length} cells`);
     return true;
-  } catch (e) {
-    console.error('Load error:', e.message);
-    return false;
-  }
+  } catch (e) { console.error('Load error:', e.message); return false; }
 }
 
 // ===== GAME LOOP =====
@@ -871,45 +901,15 @@ let lastBarb = Date.now(), lastAP = Date.now();
 
 function tick() {
   const now = Date.now();
-
-  // Check building/tech completion
   checkBuildings();
-
-  // Resource gathering
-  if (now - lastRes >= RES_INTERVAL) {
-    gatherResources();
-    lastRes = now;
-  }
-
-  // Troop generation
-  if (now - lastTroop >= TROOP_INTERVAL) {
-    genTroops();
-    io.emit('tg');
-    lastTroop = now;
-  }
-
-  // AP regen
-  if (now - lastAP >= AP_REGEN_INTERVAL) {
-    regenAP();
-    lastAP = now;
-  }
-
-  // Bot AI
+  if (now - lastRes >= RES_INTERVAL) { gatherResources(); lastRes = now; }
+  if (now - lastTroop >= TROOP_INTERVAL) { genTroops(); io.emit('tg'); lastTroop = now; }
+  if (now - lastAP >= AP_REGEN_INTERVAL) { regenAP(); lastAP = now; }
   if (now - lastBot >= BOT_INTERVAL) {
-    for (let i = 0; i < players.length; i++) {
-      if (players[i]?.isBot && players[i]?.alive) botAI(i);
-    }
+    for (let i = 0; i < players.length; i++) { if (players[i]?.isBot && players[i]?.alive) botAI(i); }
     lastBot = now;
   }
-
-  // Barbarian spawning
-  if (now - lastBarb >= BARB_SPAWN_INTERVAL) {
-    spawnBarb();
-    updateBarbs();
-    lastBarb = now;
-  }
-
-  // Broadcast dirty chunks
+  if (now - lastBarb >= BARB_SPAWN_INTERVAL) { spawnCamp(); updateCamps(); lastBarb = now; }
   if (dirtyChunks.size > 0) {
     for (const [, s] of io.sockets.sockets) {
       if (!s.subs) continue;
@@ -924,69 +924,70 @@ function tick() {
     }
     dirtyChunks.clear();
   }
-
-  // Leaderboard
-  if (now - lastLB >= LB_INTERVAL) {
-    io.emit('lb', leaderboard());
-    lastLB = now;
-  }
-
-  // Player state updates
+  if (now - lastLB >= LB_INTERVAL) { io.emit('lb', leaderboard()); lastLB = now; }
   if (now - lastState >= STATE_INTERVAL) {
     for (const [, s] of io.sockets.sockets) {
       const pi = pidMap[s.id];
-      if (pi !== undefined && players[pi]?.alive) {
-        s.emit('st', playerState(pi));
-      }
+      if (pi !== undefined && players[pi]?.alive) s.emit('st', playerState(pi));
     }
     lastState = now;
   }
-
-  // Auto-save
-  if (now - lastSave >= SAVE_INTERVAL) {
-    saveGame();
-    lastSave = now;
-  }
+  if (now - lastSave >= SAVE_INTERVAL) { saveGame(); lastSave = now; }
 }
 
 // ===== SOCKET.IO =====
 io.on('connection', (s) => {
   s.subs = new Set();
-  s.emit('mi', { w: W, h: H, cs: CHUNK, bldg: BLDG, tech: TECH });
-
+  s.emit('mi', { w: W, h: H, cs: CHUNK, bldg: BLDG, tech: TECH, discordEnabled });
   const colors = {};
   players.forEach((p,i) => { if (p?.alive) colors[i] = p.color; });
   s.emit('pc', colors);
-  s.emit('cl', clanList());
+  s.emit('cl', clanListData());
+
+  // Send terrain preview
+  const tp = buildTerrainPreview();
+  s.emit('tp', tp);
+
+  // Check Discord session
+  if (s.request && s.request.session?.discordUser) {
+    s.emit('discord_user', s.request.session.discordUser);
+  }
 
   s.on('join', (d) => {
     const name = (d.name||'').trim().slice(0,16) || 'Player';
-    // Check if reconnecting
+    const discordId = s.request?.session?.discordUser?.id || null;
     let pi = -1;
-    for (let i = 0; i < players.length; i++) {
-      if (players[i] && players[i].name === name && players[i].offline && players[i].alive) {
-        pi = i;
-        break;
+
+    // Try Discord reconnect first
+    if (discordId) {
+      for (let i = 0; i < players.length; i++) {
+        if (players[i] && players[i].discordId === discordId && players[i].alive) { pi = i; break; }
       }
     }
+    // Try name reconnect
+    if (pi < 0) {
+      for (let i = 0; i < players.length; i++) {
+        if (players[i] && players[i].name === name && players[i].offline && players[i].alive) { pi = i; break; }
+      }
+    }
+
     let pos;
     if (pi >= 0) {
-      // Reconnect
       delete pidMap[players[pi].id];
-      players[pi].id = s.id;
-      players[pi].offline = false;
+      players[pi].id = s.id; players[pi].offline = false;
+      if (discordId) players[pi].discordId = discordId;
       pidMap[s.id] = pi;
       pos = players[pi].capital || { x: W/2, y: H/2 };
       console.log(`[REJOIN] ${name} reconnected (pi=${pi})`);
     } else {
-      pos = spawnPlayer(s.id, name);
-      pi = pidMap[s.id];
+      pi = spawnPlayer(s.id, name, false, discordId);
+      pos = placePlayerAt(pi, d.sx, d.sy);
       console.log(`[JOIN] ${name} spawned at (${pos.x},${pos.y})`);
     }
     s.emit('joined', { pi, color: players[pi].color, sx: pos.x, sy: pos.y });
     s.emit('st', playerState(pi));
     io.emit('pc', { [pi]: players[pi].color });
-    s.emit('cl', clanList());
+    s.emit('cl', clanListData());
   });
 
   s.on('vp', (d) => {
@@ -1042,14 +1043,12 @@ io.on('connection', (s) => {
   s.on('bld', (d) => {
     const pi = pidMap[s.id];
     if (pi === undefined || !players[pi]?.alive) return;
-    const p = players[pi];
-    const k = d.b;
+    const p = players[pi]; const k = d.b;
     if (!BLDG[k]) return;
     const b = p.buildings[k];
     if (b.e > 0) return s.emit('msg', '이미 건설 중입니다');
     if (b.l >= BLDG_MAX) return s.emit('msg', '최대 레벨입니다');
     if (k !== 'hq' && b.l >= p.buildings.hq.l) return s.emit('msg', `본부 레벨 ${b.l+1} 필요`);
-    // Check no other building upgrading
     if (Object.values(p.buildings).some(bb => bb.e > 0)) return s.emit('msg', '다른 건물이 건설 중입니다');
     const cost = bldgCost(k, b.l);
     if (!canAfford(p, cost)) return s.emit('msg', '자원이 부족합니다');
@@ -1062,8 +1061,7 @@ io.on('connection', (s) => {
   s.on('res', (d) => {
     const pi = pidMap[s.id];
     if (pi === undefined || !players[pi]?.alive) return;
-    const p = players[pi];
-    const k = d.t;
+    const p = players[pi]; const k = d.t;
     if (!TECH[k]) return;
     const t = p.tech[k];
     if (t.e > 0) return s.emit('msg', '이미 연구 중입니다');
@@ -1071,43 +1069,31 @@ io.on('connection', (s) => {
     if (Object.values(p.tech).some(tt => tt.e > 0)) return s.emit('msg', '다른 연구가 진행 중입니다');
     const cost = techCost(k, t.l);
     if (!canAfford(p, cost)) return s.emit('msg', '자원이 부족합니다');
-    payCost(p, cost);
-    t.e = Date.now() + techTime(k, t.l, p) * 1000;
-    s.emit('st', playerState(pi));
-    s.emit('msg', `${TECH[k].n} 연구 시작!`);
+    payCost(p, cost); t.e = Date.now() + techTime(k, t.l, p) * 1000;
+    s.emit('st', playerState(pi)); s.emit('msg', `${TECH[k].n} 연구 시작!`);
   });
 
   s.on('cclan', (d) => {
-    const pi = pidMap[s.id];
-    if (pi === undefined) return;
+    const pi = pidMap[s.id]; if (pi === undefined) return;
     const ci = createClan(pi, d.name||'Clan', d.tag||'CLN');
     s.emit('cj', { ci, clan: clans[ci] ? { name:clans[ci].name, tag:clans[ci].tag, color:clans[ci].color } : null });
-    io.emit('pc', { [pi]: players[pi].color });
-    io.emit('clu', clanList());
+    io.emit('pc', { [pi]: players[pi].color }); io.emit('clu', clanListData());
   });
-
   s.on('jclan', (d) => {
-    const pi = pidMap[s.id];
-    if (pi === undefined) return;
+    const pi = pidMap[s.id]; if (pi === undefined) return;
     if (joinClan(pi, d.ci)) {
       s.emit('cj', { ci: d.ci, clan: clans[d.ci] ? { name:clans[d.ci].name, tag:clans[d.ci].tag, color:clans[d.ci].color } : null });
-      io.emit('pc', { [pi]: players[pi].color });
-      io.emit('clu', clanList());
+      io.emit('pc', { [pi]: players[pi].color }); io.emit('clu', clanListData());
     }
   });
-
   s.on('lclan', () => {
-    const pi = pidMap[s.id];
-    if (pi === undefined) return;
-    leaveClan(pi);
-    s.emit('cl_left');
-    io.emit('clu', clanList());
+    const pi = pidMap[s.id]; if (pi === undefined) return;
+    leaveClan(pi); s.emit('cl_left'); io.emit('clu', clanListData());
   });
 
-  s.on('respawn', () => {
-    const pi = pidMap[s.id];
-    if (pi === undefined) return;
-    const pos = respawnPlayer(pi);
+  s.on('respawn', (d) => {
+    const pi = pidMap[s.id]; if (pi === undefined) return;
+    const pos = respawnPlayer(pi, d?.sx, d?.sy);
     s.emit('joined', { pi, color: players[pi].color, sx: pos.x, sy: pos.y });
     s.emit('st', playerState(pi));
   });
@@ -1115,26 +1101,30 @@ io.on('connection', (s) => {
   s.on('disconnect', () => {
     const pi = pidMap[s.id];
     if (pi !== undefined && players[pi]) {
-      if (players[pi].isBot) {
-        removePlayer(pi);
-      } else {
-        // Mark offline — territory persists
-        players[pi].offline = true;
-        console.log(`[OFFLINE] ${players[pi].name} went offline (territory persists)`);
-      }
+      if (players[pi].isBot) { removePlayer(pi); }
+      else { players[pi].offline = true; console.log(`[OFFLINE] ${players[pi].name} went offline`); }
     }
   });
 });
+
+// Share session with Socket.IO
+if (session) {
+  io.engine.use((req, res, next) => {
+    const sessionMiddleware = session({
+      secret: process.env.SESSION_SECRET || 'territory-io-secret-key',
+      resave: false, saveUninitialized: false,
+    });
+    sessionMiddleware(req, res, next);
+  });
+}
 
 // ===== START =====
 terrain = generateEarthMap(W, H);
 if (!loadGame()) {
   console.log('[INIT] No save found, fresh start');
   spawnBots();
-  // Spawn initial barbs
-  for (let i = 0; i < 10; i++) spawnBarb();
+  for (let i = 0; i < 40; i++) spawnCamp();
 } else {
-  // Re-init bot AI for loaded bots
   for (let i = 0; i < players.length; i++) {
     if (players[i]?.isBot) pidMap[players[i].id] = i;
   }
@@ -1143,4 +1133,4 @@ if (!loadGame()) {
 setInterval(tick, TICK);
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🌍 Territory.io v4 on http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`Territory.io v5 on http://localhost:${PORT}`));
