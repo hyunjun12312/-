@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+  <title>Territory.io</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- ===== START SCREEN ===== -->
+  <div id="ss">
+    <div class="sc">
+      <h1 class="tt">Territory<span class="io">.io</span></h1>
+      <p class="sub">🌍 지구를 정복하라 — 전략 영토 전쟁</p>
+      <div class="ig"><input type="text" id="ni" placeholder="닉네임..." maxlength="16" autocomplete="off"></div>
+      <div id="clanSection">
+        <h3>⚔️ 동맹 목록</h3>
+        <div id="clist" class="clist"></div>
+        <div class="ca">
+          <button class="b2" onclick="showCreateClan()">+ 동맹 생성</button>
+          <button class="b1" onclick="playSolo()">▶ 시작</button>
+        </div>
+      </div>
+      <div id="createClanForm" style="display:none">
+        <h3>🛡️ 동맹 생성</h3>
+        <input type="text" id="cni" placeholder="동맹 이름" maxlength="20">
+        <input type="text" id="cti" placeholder="태그 (3~5자)" maxlength="5">
+        <div class="ca"><button class="b1" onclick="createAndPlay()">생성 & 시작</button><button class="b2" onclick="hideCreateClan()">취소</button></div>
+      </div>
+      <div class="htp">
+        <h3>🎮 조작법</h3>
+        <ul>
+          <li><b>클릭/드래그</b> 인접 빈 땅을 클릭하여 영토 확장</li>
+          <li><b>F 키</b> 전면 확장 — 모든 국경 1칸 확장</li>
+          <li><b>M 키</b> 집중 공격 모드 → 대상 클릭</li>
+          <li><b>우클릭 드래그</b> 이동 | <b>휠</b> 줌</li>
+          <li><b>Space</b> 내 영토로 이동 | <b>ESC</b> 모드 취소</li>
+          <li><b>💀</b> 야만족 — 처치 시 자원 획득</li>
+        </ul>
+        <h3>📋 게임 시스템</h3>
+        <ul>
+          <li>🏗 건물 업그레이드로 병력/자원 증가</li>
+          <li>🔬 기술 연구로 공격/방어력 강화</li>
+          <li>⚡ 행동력(AP)으로 공격 가능</li>
+          <li>🛡 신규 플레이어 8시간 보호</li>
+          <li>💾 서버 자동 저장 — 접속 끊어도 영토 유지</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== GAME SCREEN ===== -->
+  <div id="gs" style="display:none">
+    <canvas id="gameCanvas"></canvas>
+    <div id="ui">
+      <!-- Resource Bar -->
+      <div id="resbar">
+        <div class="ri">🌾 <span id="rFood">0</span></div>
+        <div class="ri">🪵 <span id="rWood">0</span></div>
+        <div class="ri">🪨 <span id="rStone">0</span></div>
+        <div class="ri">💰 <span id="rGold">0</span></div>
+        <div class="ri ap">⚡ <span id="rAP">0</span></div>
+      </div>
+
+      <!-- Left Panel: Info + Buildings + Tech -->
+      <div id="lpanel">
+        <div id="info">
+          <div id="mn">-</div>
+          <div class="sr"><span class="sl">영토</span><span id="myc" class="sv">0</span></div>
+          <div class="sr"><span class="sl">병력</span><span id="myt" class="sv">0</span></div>
+        </div>
+        <div class="ptabs">
+          <button class="ptab active" onclick="showPanel('bldgPanel')">🏗 건물</button>
+          <button class="ptab" onclick="showPanel('techPanel')">🔬 연구</button>
+          <button class="ptab" onclick="showPanel('allyPanel')">⚔️ 동맹</button>
+        </div>
+        <div id="bldgPanel" class="sp" style="display:block">
+          <div id="bldgList"></div>
+        </div>
+        <div id="techPanel" class="sp">
+          <div id="techList"></div>
+        </div>
+        <div id="allyPanel" class="sp">
+          <div id="cp" style="display:none">
+            <div class="ph"><span id="cpn"></span><button class="bs" onclick="leaveClanAction()">탈퇴</button></div>
+          </div>
+          <div id="allyInfo"><p class="muted">동맹에 소속되어 있지 않습니다.<br>시작 화면에서 동맹에 가입하세요.</p></div>
+        </div>
+      </div>
+
+      <!-- Right Panel: Leaderboard + Minimap -->
+      <div id="rpanel">
+        <div id="lboard">
+          <div class="tabs">
+            <button class="tab active" onclick="showTab('plb')">개인</button>
+            <button class="tab" onclick="showTab('clb')">동맹</button>
+          </div>
+          <div id="plb" class="tc" style="display:block"></div>
+          <div id="clb" class="tc"></div>
+        </div>
+        <div id="mm"><canvas id="minimapCanvas" width="200" height="100"></canvas></div>
+      </div>
+
+      <!-- Mode / Troop Info -->
+      <div id="si" style="display:none"><span id="sc"></span> | <span id="st2">병력: 0</span>
+        <button class="modeBtn" onclick="document.dispatchEvent(new KeyboardEvent('keydown',{key:'f'}))">F 전면확장</button>
+        <button class="modeBtn" onclick="document.dispatchEvent(new KeyboardEvent('keydown',{key:'m'}))">M 집중공격</button>
+      </div>
+
+      <!-- Home Button -->
+      <button id="homeBtn" onclick="centerOnMe()">👑 내 영토</button>
+      <div id="coordsDisplay"></div>
+    </div>
+
+    <!-- Death Screen -->
+    <div id="ds" style="display:none">
+      <div class="dc">
+        <h2>💀 패배</h2>
+        <p>영토를 모두 잃었습니다</p>
+        <p class="muted">건물과 기술이 초기화됩니다</p>
+        <button class="b1" onclick="respawn()">다시 시작</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>

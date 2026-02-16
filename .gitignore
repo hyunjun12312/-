@@ -1,0 +1,4 @@
+node_modules/
+gamestate.json
+gamestate_backup.json
+.env
