@@ -11,9 +11,10 @@ const app = express();
 const server = http.createServer(app);
 
 // ===== DISCORD OAUTH2 =====
-const DISCORD_CLIENT_ID = '1472925585440374914';
-const DISCORD_CLIENT_SECRET = 'Q5DINVzUzyZ-_2y81-vESx-nPiU2oDEo';
+const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || '1472925585440374914';
+const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || 'Q5DINVzUzyZ-_2y81-vESx-nPiU2oDEo';
 const DISCORD_REDIRECT = process.env.DISCORD_REDIRECT || 'http://localhost:3000/auth/discord/callback';
+const IS_RAILWAY = !!process.env.RAILWAY_ENVIRONMENT;
 
 const sessionMiddleware = session({
   secret: 'territory-io-secret-' + Date.now(),
@@ -2663,7 +2664,7 @@ function tick() {
       sock.emit('units', getUnitStates(pi));
     }
   }
-  if (now - lastSave >= SAVE_INT) { lastSave = now; saveGame(); }
+  if (!IS_RAILWAY && now - lastSave >= SAVE_INT) { lastSave = now; saveGame(); }
   } catch (e) { console.error('[TickError]', e.stack || e); }
 }
 
