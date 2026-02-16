@@ -26,10 +26,15 @@ var lastMsg = '', msgTimer = 0;
 var lastReward = null, rewardTimer = 0;
 
 // Round system
-var roundInfo = { phase: 'waiting', remaining: 0, duration: 0, roundNumber: 0, stormR: 9999, stormCX: 400, stormCY: 200 };
+var roundInfo = { phase: 'waiting', remaining: 0, duration: 0, roundNumber: 0 };
 var roundEndData = null; // set when round ends
-var PHASE_NAMES = { active: '⚔️ 전투', ending: '🏆 종료', waiting: '⏳ 대기' };
-var PHASE_COLORS = { active: '#FF9800', ending: '#9C27B0', waiting: '#607D8B' };
+var PHASE_NAMES = { active: '⚔️ 전투', ending: '🏆 종료', waiting: '⏳ 대기', lobby: '🏠 로비' };
+var PHASE_COLORS = { active: '#FF9800', ending: '#9C27B0', waiting: '#607D8B', lobby: '#4CAF50' };
+
+// Lobby system
+var lobbyState = null;  // { countdown, players, maxPlayers, mapName, roundNumber }
+var inLobby = true;     // true when showing lobby UI
+var lobbyJoined = false; // true after clicking join
 
 // Units
 var activeUnits = []; // units received from server
@@ -331,8 +336,12 @@ function buildCivGrid(containerId, small) {
       myCiv = key;
       container.querySelectorAll('.civ-card').forEach(function(c) { c.classList.remove('selected'); });
       this.classList.add('selected');
-      var desc = document.getElementById('civDesc');
+      var desc = document.getElementById('civDesc') || document.getElementById('lobbyCivDesc');
       if (desc) desc.textContent = CIVS[key].desc;
+      // If in lobby, notify server of civ change
+      if (inLobby && lobbyJoined) {
+        socket.emit('lobbyCiv', { civ: key });
+      }
     });
     container.appendChild(card);
   });
@@ -422,7 +431,93 @@ function setupSpawnMapClick(canvasId, markerId, coordId, isRespawn) {
   };
 }
 
-// ===== START / RESPAWN =====
+// ===== START / RESPAWN / LOBBY =====
+function checkLogin() {
+  if (!discordUser) return;
+  document.getElementById('ss').style.display = 'none';
+  showLobbyScreen();
+}
+
+function showLobbyScreen() {
+  document.getElementById('ss').style.display = 'none';
+  document.getElementById('ds').style.display = 'none';
+  document.getElementById('gu').style.display = 'none';
+  document.getElementById('lobbyScreen').style.display = '';
+  inLobby = true;
+  lobbyJoined = false;
+  // Show user info
+  var userEl = document.getElementById('lobbyUserInfo');
+  if (userEl && discordUser) {
+    userEl.innerHTML = '<span class="lobby-username">' + (discordUser.name || 'Player') + '</span>' +
+      ' <a href="/auth/logout" class="lobby-logout">로그아웃</a>';
+  }
+  // Build civ grid for lobby
+  buildCivGrid('lobbyCivGrid', false);
+  // Render map preview and update lobby info
+  renderLobbyMapPreview();
+  updateLobbyUI();
+}
+
+function joinLobby() {
+  if (!discordUser) { window.location.href = '/auth/discord'; return; }
+  if (lobbyJoined) return;
+  lobbyJoined = true;
+  var name = discordUser.name || 'Player';
+  socket.emit('joinLobby', { name: name, civ: myCiv });
+  var btn = document.getElementById('lobbyJoinBtn');
+  if (btn) { btn.textContent = '✅ 참가 완료'; btn.classList.add('joined'); }
+}
+
+function renderLobbyMapPreview() {
+  var c = document.getElementById('lobbyMapPreview');
+  if (!c || !terrainPreviewData) return;
+  var ctx2 = c.getContext('2d');
+  var d = terrainPreviewData;
+  var img = ctx2.createImageData(d.w, d.h);
+  for (var i = 0; i < d.t.length; i++) {
+    var tc = TERRAIN_COLORS[d.t[i]] || [0,0,0];
+    var pi2 = i * 4;
+    img.data[pi2] = tc[0]; img.data[pi2+1] = tc[1]; img.data[pi2+2] = tc[2]; img.data[pi2+3] = 255;
+  }
+  var tmpC = document.createElement('canvas');
+  tmpC.width = d.w; tmpC.height = d.h;
+  tmpC.getContext('2d').putImageData(img, 0, 0);
+  ctx2.imageSmoothingEnabled = true;
+  ctx2.drawImage(tmpC, 0, 0, d.w, d.h, 0, 0, c.width, c.height);
+}
+
+function updateLobbyUI() {
+  if (!lobbyState) return;
+  var nameEl = document.getElementById('lobbyMapName');
+  if (nameEl) nameEl.textContent = lobbyState.mapName || '???';
+  var timerEl = document.getElementById('lobbyTimer');
+  if (timerEl) timerEl.textContent = Math.ceil((lobbyState.countdown || 0) / 1000) + 's';
+  var countEl = document.getElementById('lobbyPlayerCount');
+  if (countEl) countEl.textContent = (lobbyState.players ? lobbyState.players.length : 0) + '/' + (lobbyState.maxPlayers || 20) + ' 👥';
+  // Player list
+  var listEl = document.getElementById('lobbyPlayersList');
+  if (listEl && lobbyState.players) {
+    var html = '';
+    for (var i = 0; i < lobbyState.players.length; i++) {
+      var p = lobbyState.players[i];
+      var civInfo = CIVS[p.civ] || {};
+      html += '<div class="lobby-player-item">' +
+        '<span class="lobby-player-color" style="background:' + p.color + '"></span>' +
+        '<span class="lobby-player-name">' + p.name + '</span>' +
+        '<span class="lobby-player-civ">' + (civInfo.icon || '') + '</span>' +
+        '</div>';
+    }
+    if (lobbyState.players.length === 0) {
+      html = '<div class="lobby-no-players">아직 참가자가 없습니다</div>';
+    }
+    listEl.innerHTML = html;
+  }
+}
+
+function respawnMidGame() {
+  socket.emit('respawn', { civ: myCiv });
+}
+
 function startGame() {
   if (!discordUser) { window.location.href = '/auth/discord'; return; }
   var name = discordUser.name || 'Player';
@@ -433,12 +528,7 @@ function startGame() {
 }
 
 function respawn() {
-  var sel = document.querySelector('#respawnCivGrid .civ-card.selected');
-  var civ = sel ? sel.dataset.civ : myCiv;
-  var data = { civ: civ };
-  if (respawnX >= 0 && respawnY >= 0) { data.sx = respawnX; data.sy = respawnY; }
-  socket.emit('respawn', data);
-  respawnX = -1; respawnY = -1;
+  socket.emit('respawn', { civ: myCiv });
 }
 
 // ===== TAB SWITCHING =====
@@ -476,12 +566,14 @@ socket.on('joined', function(d) {
   myColor = d.color;
   myCiv = d.civ || 'rome';
   alive = true;
+  inLobby = false;
   camX = d.sx - Math.floor(vpW / zoom / 2);
   camY = d.sy - Math.floor(vpH / zoom / 2);
   targetCamX = camX;
   targetCamY = camY;
   document.getElementById('ss').style.display = 'none';
   document.getElementById('ds').style.display = 'none';
+  document.getElementById('lobbyScreen').style.display = 'none';
   document.getElementById('gu').style.display = '';
   resize();
   sendViewport();
@@ -548,17 +640,9 @@ socket.on('reward', function(r) {
 
 socket.on('died', function() {
   alive = false;
-  respawnX = -1; respawnY = -1;
   document.getElementById('gu').style.display = 'none';
   document.getElementById('ds').style.display = '';
   showDeathStats();
-  buildCivGrid('respawnCivGrid', true);
-  renderSpawnMap('respawnMap');
-  setupSpawnMapClick('respawnMap', 'respawnMarker', 'respawnCoordText', true);
-  var rm = document.getElementById('respawnMarker');
-  if (rm) rm.style.display = 'none';
-  var rct = document.getElementById('respawnCoordText');
-  if (rct) rct.textContent = '위치: 랜덤';
 });
 
 socket.on('tg', function() {});
@@ -582,11 +666,8 @@ socket.on('tp', function(d) {
   tmpC.width = d.w; tmpC.height = d.h;
   tmpC.getContext('2d').putImageData(img, 0, 0);
   mmCtx.drawImage(tmpC, 0, 0, d.w, d.h, 0, 0, mmW, mmH);
-  // Render spawn selection maps
-  renderSpawnMap('spawnMap');
-  renderSpawnMap('respawnMap');
-  setupSpawnMapClick('spawnMap', 'spawnMarker', 'spawnCoordText', false);
-  setupSpawnMapClick('respawnMap', 'respawnMarker', 'respawnCoordText', true);
+  // Render lobby map preview if in lobby
+  renderLobbyMapPreview();
 });
 
 socket.on('combo', function(d) { showCombo(d.count); });
@@ -606,8 +687,11 @@ socket.on('roundEnd', function(d) {
   showRoundEndScreen(d);
 });
 
-socket.on('roundReset', function(d) {
-  // New round starting — clear all cached data
+// Lobby events
+socket.on('enterLobby', function(d) {
+  lobbyState = d;
+  lobbyJoined = false;
+  // Clear game state
   roundEndData = null;
   chunks = {};
   activeUnits = [];
@@ -615,10 +699,46 @@ socket.on('roundReset', function(d) {
   unitDustParticles = [];
   lb = { p: [], c: [] };
   mySt = null;
-  // Clear buffer
+  myPi = -1;
+  alive = false;
   bCtx.fillStyle = '#000';
   bCtx.fillRect(0, 0, buf.width, buf.height);
-  // Hide round end screen
+  // Hide round end overlay
+  var reo = document.getElementById('roundEndOverlay');
+  if (reo) reo.style.display = 'none';
+  // Show lobby
+  if (discordUser) {
+    showLobbyScreen();
+    updateLobbyUI();
+  }
+});
+
+socket.on('lobbyState', function(d) {
+  lobbyState = d;
+  if (inLobby) updateLobbyUI();
+});
+
+socket.on('gameStart', function(d) {
+  // Game is starting from lobby
+  roundInfo.roundNumber = d.roundNumber;
+  roundInfo.duration = d.duration;
+  roundEndData = null;
+  inLobby = false;
+  var reo = document.getElementById('roundEndOverlay');
+  if (reo) reo.style.display = 'none';
+});
+
+socket.on('roundReset', function(d) {
+  // Legacy round reset — handled by enterLobby now
+  roundEndData = null;
+  chunks = {};
+  activeUnits = [];
+  unitInterp = {};
+  unitDustParticles = [];
+  lb = { p: [], c: [] };
+  mySt = null;
+  bCtx.fillStyle = '#000';
+  bCtx.fillRect(0, 0, buf.width, buf.height);
   var reo = document.getElementById('roundEndOverlay');
   if (reo) reo.style.display = 'none';
   roundInfo.roundNumber = d.roundNumber;
@@ -2520,16 +2640,7 @@ setInterval(function() { if (alive && mySt) { /* periodic update */ } }, 500);
 fetch('/auth/me').then(function(r) { return r.json(); }).then(function(d) {
   if (d.loggedIn) {
     discordUser = { id: d.id, name: d.name, avatar: d.avatar };
-    var loginSec = document.getElementById('loginSection');
-    var afterSec = document.getElementById('afterLogin');
-    if (loginSec) loginSec.style.display = 'none';
-    if (afterSec) afterSec.style.display = '';
-    var userEl = document.getElementById('discordUser');
-    if (userEl) {
-      var avatarHtml = d.avatar
-        ? '<img src="' + d.avatar + '?size=32" class="discord-avatar">'
-        : '<span class="discord-avatar-placeholder">\uD83D\uDC7E</span>';
-      userEl.innerHTML = avatarHtml + '<span class="discord-name">' + d.name + '</span>';
-    }
+    // Transition to lobby screen
+    checkLogin();
   }
 }).catch(function() {});

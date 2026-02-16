@@ -730,3 +730,213 @@ body {
   color: #4CAF50;
   font-weight: 600;
 }
+
+/* ═══════ LOBBY SCREEN ═══════ */
+#lobbyScreen {
+  background: radial-gradient(ellipse at 30% 40%, rgba(15,18,42,0.97), rgba(6,6,14,0.99));
+}
+.lobby-container {
+  max-width: 900px;
+  width: 90vw;
+  animation: boxAppear 0.5s ease-out;
+}
+.lobby-title {
+  font-family: 'Orbitron', sans-serif;
+  color: transparent;
+  background: linear-gradient(135deg, #ffd700, #ffaa00, #ffd700);
+  -webkit-background-clip: text;
+  background-clip: text;
+  font-size: 28px;
+  text-align: center;
+  margin-bottom: 20px;
+  filter: drop-shadow(0 0 12px rgba(255,215,0,0.3));
+}
+.lobby-main {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+.lobby-map-section {
+  flex: 1.4;
+  background: linear-gradient(145deg, rgba(22,24,48,0.95), rgba(14,14,30,0.98));
+  border: 1px solid rgba(255,215,0,0.15);
+  border-radius: 16px;
+  overflow: hidden;
+  position: relative;
+}
+.lobby-badge-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 14px;
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.lobby-mode-badge {
+  background: linear-gradient(135deg, #3F51B5, #1A237E);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 4px 14px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+.lobby-timer-badge {
+  background: linear-gradient(135deg, #FF9800, #E65100);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 800;
+  padding: 4px 14px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  min-width: 52px;
+  text-align: center;
+  animation: timerPulse 1s ease-in-out infinite;
+}
+@keyframes timerPulse {
+  0%,100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+#lobbyMapPreview {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 2/1;
+  display: block;
+  border-radius: 0;
+  image-rendering: auto;
+}
+.lobby-map-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: rgba(0,0,0,0.3);
+}
+.lobby-map-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.lobby-map-label {
+  font-size: 11px;
+  color: #888;
+  letter-spacing: 0.5px;
+}
+.lobby-map-name {
+  font-size: 20px;
+  font-weight: 800;
+  color: #fff;
+  font-family: 'Orbitron', sans-serif;
+}
+.lobby-player-count {
+  font-size: 16px;
+  font-weight: 700;
+  color: #4CAF50;
+}
+
+/* Lobby Side Panel */
+.lobby-side {
+  flex: 0.8;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.lobby-user-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.lobby-username {
+  font-weight: 700;
+  font-size: 15px;
+  color: #e0e0e8;
+}
+.lobby-logout {
+  font-size: 11px;
+  color: #666;
+  text-decoration: none;
+  margin-left: auto;
+}
+.lobby-logout:hover { color: #e74c3c; }
+.lobby-civ-section h3, .lobby-players-section h4 {
+  font-size: 13px;
+  color: #aaa;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.lobby-join-btn {
+  width: 100%;
+  padding: 14px;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  border-radius: 12px;
+  transition: all 0.3s;
+}
+.lobby-join-btn.joined {
+  background: linear-gradient(135deg, #2E7D32, #1B5E20) !important;
+  cursor: default;
+}
+.lobby-players-section {
+  background: rgba(255,255,255,0.03);
+  border-radius: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255,255,255,0.05);
+  max-height: 200px;
+  overflow-y: auto;
+}
+.lobby-players-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.lobby-player-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 6px;
+}
+.lobby-player-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.lobby-player-name {
+  font-size: 13px;
+  color: #ddd;
+  font-weight: 600;
+}
+.lobby-player-civ {
+  font-size: 14px;
+  margin-left: auto;
+}
+.lobby-no-players {
+  font-size: 12px;
+  color: #666;
+  text-align: center;
+  padding: 8px;
+}
+.death-hint {
+  font-size: 12px;
+  color: #888;
+  margin: 10px 0;
+}
+
+/* Lobby responsive */
+@media (max-width: 700px) {
+  .lobby-main {
+    flex-direction: column;
+  }
+  .lobby-side {
+    width: 100%;
+  }
+}

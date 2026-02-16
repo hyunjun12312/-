@@ -10,35 +10,50 @@
 <body>
   <canvas id="gameCanvas"></canvas>
 
-  <!-- Start Screen -->
+  <!-- Start Screen (Discord Login only) -->
   <div id="ss" class="screen">
     <div class="login-box">
       <h1>🏰 Territory.io</h1>
       <p class="subtitle">전략적 영토 정복 게임</p>
-      <!-- Discord Login Section -->
       <div id="loginSection">
         <p class="login-hint">디스코드로 로그인하면 진행내역이 저장됩니다</p>
         <a href="/auth/discord" class="btn btn-discord">👾 Discord로 로그인</a>
       </div>
-      <!-- After Login Section (hidden until authenticated) -->
-      <div id="afterLogin" style="display:none">
-        <div id="discordUser" class="discord-user"></div>
-        <div class="civ-section">
-          <h3>문명 선택</h3>
-          <div id="civGrid" class="civ-grid"></div>
-          <div id="civDesc" class="civ-desc">문명을 선택하세요</div>
-        </div>
-        <div class="spawn-section">
-          <h3>🗺️ 시작 위치 선택</h3>
-          <p class="spawn-hint">지도를 클릭하여 시작 위치를 선택하세요 (바다 제외)</p>
-          <div class="spawn-map-wrap">
-            <canvas id="spawnMap" width="300" height="150"></canvas>
-            <div id="spawnMarker" class="spawn-marker" style="display:none">✦</div>
+    </div>
+  </div>
+
+  <!-- Lobby Screen -->
+  <div id="lobbyScreen" class="screen" style="display:none">
+    <div class="lobby-container">
+      <h1 class="lobby-title">🏰 Territory.io</h1>
+      <div class="lobby-main">
+        <div class="lobby-map-section">
+          <div class="lobby-badge-row">
+            <span class="lobby-mode-badge">개인전</span>
+            <span class="lobby-timer-badge" id="lobbyTimer">45s</span>
           </div>
-          <p id="spawnCoordText" class="spawn-coord">위치: 랜덤</p>
+          <canvas id="lobbyMapPreview" width="400" height="200"></canvas>
+          <div class="lobby-map-info">
+            <div class="lobby-map-left">
+              <span class="lobby-map-label">다음 게임 참가</span>
+              <span class="lobby-map-name" id="lobbyMapName">리스본</span>
+            </div>
+            <span class="lobby-player-count" id="lobbyPlayerCount">0/20 👥</span>
+          </div>
         </div>
-        <button onclick="startGame()" class="btn btn-gold">게임 시작</button>
-        <a href="/auth/logout" class="logout-link">로그아웃</a>
+        <div class="lobby-side">
+          <div id="lobbyUserInfo" class="lobby-user-info"></div>
+          <div class="lobby-civ-section">
+            <h3>문명 선택</h3>
+            <div id="lobbyCivGrid" class="civ-grid"></div>
+            <div id="lobbyCivDesc" class="civ-desc">문명을 선택하세요</div>
+          </div>
+          <button id="lobbyJoinBtn" onclick="joinLobby()" class="btn btn-gold lobby-join-btn">🎮 참가</button>
+          <div class="lobby-players-section">
+            <h4>참가자</h4>
+            <div id="lobbyPlayersList" class="lobby-players-list"></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -49,20 +64,8 @@
       <h2>💀 멸망</h2>
       <p>영토를 모두 잃었습니다!</p>
       <div id="deathStats" class="death-stats"></div>
-      <div class="civ-section small">
-        <h3>문명 재선택</h3>
-        <div id="respawnCivGrid" class="civ-grid small"></div>
-      </div>
-      <div class="spawn-section">
-        <h3>🗺️ 부활 위치 선택</h3>
-        <p class="spawn-hint">지도를 클릭하여 부활 위치를 선택하세요</p>
-        <div class="spawn-map-wrap">
-          <canvas id="respawnMap" width="300" height="150"></canvas>
-          <div id="respawnMarker" class="spawn-marker" style="display:none">✦</div>
-        </div>
-        <p id="respawnCoordText" class="spawn-coord">위치: 랜덤</p>
-      </div>
-      <button onclick="respawn()" class="btn btn-gold">다시 시작</button>
+      <p class="death-hint">다음 라운드가 시작되면 자동으로 로비로 돌아갑니다</p>
+      <button onclick="respawnMidGame()" class="btn btn-gold">즉시 부활</button>
     </div>
   </div>
 

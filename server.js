@@ -30,7 +30,7 @@ io.engine.use(sessionMiddleware);
 app.use(express.static('public'));
 
 // Health check for Railway
-app.get('/health', (req, res) => res.status(200).json({ status: 'ok', round: roundNumber, phase: roundPhase }));
+app.get('/health', (req, res) => res.status(200).json({ status: 'ok', round: roundNumber, phase: roundPhase, lobby: lobbyQueue.size }));
 
 // Discord OAuth2 routes
 app.get('/auth/discord', (req, res) => {
@@ -108,10 +108,23 @@ const ROUND_END_DELAY = 12000;           // 12s scoreboard before new round
 const DOMINATION_RATIO = 0.50;           // 50% of playable cells = instant win
 const STORM_INITIAL_R = Math.ceil(Math.hypot(W/2, H/2)) + 10;
 const STORM_FINAL_R = 25;
-let roundStartTime = 0, roundNumber = 0, roundPhase = 'waiting';
+let roundStartTime = 0, roundNumber = 0, roundPhase = 'lobby';
 let stormCenterX = Math.floor(W/2), stormCenterY = Math.floor(H/2), currentStormR = STORM_INITIAL_R;
 let totalPlayableCells = 0;
 let roundEndTimer = null;
+
+// ===== LOBBY SYSTEM =====
+const LOBBY_DURATION = 45000;            // 45 seconds lobby countdown
+const LOBBY_MIN_PLAYERS = 1;             // min humans to start
+const MAX_HUMAN_PLAYERS = 20;            // max human players per game
+let lobbyStartTime = 0;
+let lobbyMapName = '';
+const lobbyQueue = new Map();            // socketId → { name, civ, discordId, color }
+const MAP_NAMES = [
+  '리스본','콘스탄티노플','카르타고','아테네','바빌론','알렉산드리아','로마','장안',
+  '경주','교토','사마르칸트','쿠스코','테노치티틀란','앙코르','델리','바그다드',
+  '카이로','베이징','런던','파리','이스탄불','모스크바','비엔나','프라하'
+];
 const DEFENSE = [0, 1.0, 1.6, 2.0, 4.0, 1.8, 99, 0, 2.5, 1.4];
 const COMBO_WINDOW = 5000;
 
@@ -2092,62 +2105,95 @@ function endRound(winnerPi, reason) {
     scoreboard,
     nextRoundIn: ROUND_END_DELAY
   });
-  roundEndTimer = setTimeout(() => startNewRound(), ROUND_END_DELAY);
+  roundEndTimer = setTimeout(() => enterLobby(), ROUND_END_DELAY);
 }
 
-function startNewRound() {
+// ===== LOBBY SYSTEM =====
+function enterLobby() {
   roundNumber++;
-  console.log('[Round ' + roundNumber + '] Starting new round...');
-  // Kill all units
+  console.log('[Lobby] Entering lobby for round ' + roundNumber + '...');
+  // Clear ALL game state
   units.length = 0;
   nextUnitId = 1;
-  // Clear all territory
   for (let i = 0; i < W * H; i++) { owner[i] = -1; troops[i] = 0; }
   for (let pi = 0; pi < players.length; pi++) {
     if (playerCells[pi]) playerCells[pi].clear();
   }
+  players.length = 0;
+  playerCells.length = 0;
+  playerVisibleChunks.length = 0;
+  playerVisionSources.length = 0;
+  playerVisionRange.length = 0;
+  for (const sid in pidMap) delete pidMap[sid];
   barbs.length = 0;
   clans.length = 0;
   mapBuildings.clear();
   dirtyChunks.clear();
-  // Regenerate map
+  nextColor = 0;
+  // Generate new map
   terrain = generateEarthMap(W, H);
   specialTiles = new Uint8Array(W * H);
   generateSpecialTiles();
   totalPlayableCells = countPlayableCells();
-  // Reset storm
-  stormCenterX = Math.floor(W / 2);
-  stormCenterY = Math.floor(H / 2);
-  currentStormR = STORM_INITIAL_R;
-  // Reset all players
-  const civKeys = Object.keys(CIVS);
-  for (let pi = 0; pi < players.length; pi++) {
-    const p = players[pi];
-    p.alive = true;
-    p.resources = initResources();
-    p.buildings = initBuildings();
-    p.tech = initTech();
-    p.totalTroops = 80;
-    p.protection = Date.now() + 30000;
-    p.spawnTime = Date.now();
-    p.shieldEnd = 0;
-    p.combo = { count: 0, lastTime: 0 };
-    p.killStreak = 0; p.bestStreak = 0; p.questStreak = 0;
-    p.lastExpand = 0;
-    p.stats = initStats();
-    p.quests = generateQuests(p);
-    p.offline = p.isBot ? false : true; // human players need to reconnect
-    p.clanId = -1;
-    if (p.isBot) {
-      p.civ = civKeys[pi % civKeys.length];
+  // Lobby state
+  roundPhase = 'lobby';
+  lobbyStartTime = Date.now();
+  lobbyMapName = MAP_NAMES[Math.floor(Math.random() * MAP_NAMES.length)];
+  lobbyQueue.clear();
+  // Auto-add currently connected players back to lobby queue
+  for (const [sid, sock] of io.sockets.sockets) {
+    const sess = sock.request.session;
+    if (sess && sess.discordId) {
+      lobbyQueue.set(sid, {
+        name: sess.discordName || 'Player',
+        civ: 'rome',
+        discordId: sess.discordId,
+        color: COLORS[lobbyQueue.size % COLORS.length]
+      });
     }
   }
-  // Spawn bots (ensure we have enough)
-  while (players.filter(p => p.isBot).length < BOT_COUNT) {
-    const bi = players.filter(p => p.isBot).length;
-    spawnPlayer('Bot-' + (bi + 1), civKeys[bi % civKeys.length], true);
+  // Broadcast lobby state
+  const tp = buildTerrainPreview();
+  io.emit('tp', tp);
+  io.emit('enterLobby', getLobbyState());
+  console.log('[Lobby] Map: ' + lobbyMapName + ', ' + lobbyQueue.size + ' players queued');
+}
+
+function getLobbyState() {
+  const elapsed = Date.now() - lobbyStartTime;
+  const remaining = Math.max(0, LOBBY_DURATION - elapsed);
+  const playerList = [];
+  for (const [sid, data] of lobbyQueue) {
+    playerList.push({ name: data.name, color: data.color, civ: data.civ });
   }
-  // Place all alive players
+  return {
+    phase: 'lobby',
+    roundNumber,
+    mapName: lobbyMapName,
+    countdown: remaining,
+    players: playerList,
+    maxPlayers: MAX_HUMAN_PLAYERS,
+    totalPlayable: totalPlayableCells
+  };
+}
+
+function startGameFromLobby() {
+  console.log('[Round ' + roundNumber + '] Starting from lobby...');
+  roundPhase = 'active';
+  roundStartTime = Date.now();
+  // Create players from lobby queue
+  const civKeys = Object.keys(CIVS);
+  for (const [sid, data] of lobbyQueue) {
+    const pi = spawnPlayer(data.name, data.civ, false);
+    if (data.discordId) players[pi].discordId = data.discordId;
+    pidMap[sid] = pi;
+  }
+  // Add bots
+  let botIdx = 0;
+  while (players.filter(p => p.isBot).length < BOT_COUNT) {
+    spawnPlayer('Bot-' + (++botIdx), civKeys[botIdx % civKeys.length], true);
+  }
+  // Place everyone
   for (let pi = 0; pi < players.length; pi++) {
     if (!players[pi].alive) continue;
     const sp = findSpawn();
@@ -2155,44 +2201,35 @@ function startNewRound() {
   }
   // Spawn camps
   for (let i = 0; i < 30; i++) spawnCamp();
-  // Set round state
-  roundStartTime = Date.now();
-  roundPhase = 'active';
   // Compute visibility
   updateAllVisibility();
-  // Notify all connected clients
+  // Build color map
   const pc = {};
   for (let pi = 0; pi < players.length; pi++) { if (players[pi].alive) pc[pi] = players[pi].color; }
-  io.emit('roundReset', {
-    roundNumber,
-    roundDuration: ROUND_DURATION,
-    mapW: W, mapH: H
-  });
-  io.emit('mi', { w: W, h: H, cs: CHUNK, bldg: BLDG, tech: TECH, civs: CIVS, ranks: RANKS, stiles: STILES, defense: DEFENSE, unitTypes: UNIT_TYPES });
+  // Notify all clients
+  io.emit('gameStart', { roundNumber, mapName: lobbyMapName, duration: ROUND_DURATION });
+  io.emit('mi', { w: W, h: H, cs: CHUNK, bldg: BLDG, tech: TECH, civs: CIVS, ranks: RANKS, stiles: STILES, defense: DEFENSE, unitTypes: UNIT_TYPES, bldgCodes: BLDG_CODES });
   io.emit('pc', pc);
   io.emit('tp', buildTerrainPreview());
-  // Auto-rejoin connected human players
-  for (const [sid, pi] of Object.entries(pidMap)) {
+  // Send joined to each lobby player
+  for (const [sid, data] of lobbyQueue) {
     const sock = io.sockets.sockets.get(sid);
     if (!sock) continue;
+    const pi = pidMap[sid];
+    if (pi === undefined) continue;
     const p = players[pi];
-    if (p && !p.isBot) {
-      p.offline = false;
-      p.alive = true;
-      const sp2 = findSpawn();
-      // Clear old territory and respawn
-      if (playerCells[pi]) playerCells[pi].clear();
-      placePlayerAt(pi, sp2.x, sp2.y);
-      playerVisibleChunks[pi] = computeVisibility(pi);
-      sock.emit('joined', { pi, color: p.color, sx: p.capital.x, sy: p.capital.y, civ: p.civ });
-      const st = playerState(pi);
-      if (st) sock.emit('st', st);
-    }
+    playerVisibleChunks[pi] = computeVisibility(pi);
+    sock.emit('joined', { pi, color: p.color, sx: p.capital.x, sy: p.capital.y, civ: p.civ });
+    const st = playerState(pi);
+    if (st) sock.emit('st', st);
   }
-  console.log('[Round ' + roundNumber + '] Started with ' + players.filter(p => p.alive).length + ' players');
+  const humans = players.filter(p => !p.isBot).length;
+  const bots = players.filter(p => p.isBot).length;
+  console.log('[Round ' + roundNumber + '] Started: ' + humans + ' humans, ' + bots + ' bots on ' + lobbyMapName);
 }
 
 function getRoundInfo() {
+  if (roundPhase === 'lobby') return getLobbyState();
   return {
     roundNumber,
     phase: getRoundPhase(),
@@ -2571,8 +2608,20 @@ const ROUND_INFO_INT = 1000; // broadcast round info every 1s
 
 function tick() {
   try {
-  if (roundPhase === 'ending' || roundPhase === 'waiting') return; // paused during round transition
   const now = Date.now();
+  // Lobby phase: just broadcast countdown, check if time to start
+  if (roundPhase === 'lobby') {
+    if (now - lastRoundInfo >= 1000) {
+      lastRoundInfo = now;
+      io.emit('lobbyState', getLobbyState());
+    }
+    const elapsed = now - lobbyStartTime;
+    if (elapsed >= LOBBY_DURATION && lobbyQueue.size >= LOBBY_MIN_PLAYERS) {
+      startGameFromLobby();
+    }
+    return;
+  }
+  if (roundPhase === 'ending' || roundPhase === 'waiting') return;
   checkBuildings();
   moveUnits();
   if (now - lastRes >= RES_INT) { lastRes = now; gatherResources(); }
@@ -2581,7 +2630,6 @@ function tick() {
   if (now - lastCamp >= CAMP_INT) { lastCamp = now; spawnCamp(); updateCamps(); }
   if (now - lastVis >= VIS_INT) { lastVis = now; updateAllVisibility(); }
   if (now - lastCannon >= CANNON_INT) { lastCannon = now; coastalDefenseTick(); }
-  // Storm system removed
   // Round info broadcast
   if (now - lastRoundInfo >= ROUND_INFO_INT) { lastRoundInfo = now; io.emit('roundInfo', getRoundInfo()); }
   // Win conditions
@@ -2626,9 +2674,45 @@ io.on('connection', (socket) => {
   for (let pi = 0; pi < players.length; pi++) { if (players[pi].alive) pc[pi] = players[pi].color; }
   socket.emit('pc', pc);
   socket.emit('tp', buildTerrainPreview());
-  socket.emit('roundInfo', getRoundInfo());
+  // Send current phase state
+  if (roundPhase === 'lobby') {
+    socket.emit('enterLobby', getLobbyState());
+  } else {
+    socket.emit('roundInfo', getRoundInfo());
+  }
+
+  // Lobby join
+  socket.on('joinLobby', (d) => {
+    if (roundPhase !== 'lobby') return;
+    if (lobbyQueue.size >= MAX_HUMAN_PLAYERS) { socket.emit('msg', '로비가 가득 찼습니다!'); return; }
+    if (lobbyQueue.has(socket.id)) { socket.emit('msg', '이미 참가했습니다!'); return; }
+    const sess = socket.request.session;
+    const discordId = (sess && sess.discordId) ? sess.discordId : null;
+    const name = (d && d.name) ? String(d.name).substring(0, 20) : (sess && sess.discordName ? sess.discordName : 'Player');
+    const civ = (d && d.civ && CIVS[d.civ]) ? d.civ : 'rome';
+    const color = COLORS[lobbyQueue.size % COLORS.length];
+    lobbyQueue.set(socket.id, { name, civ, discordId, color });
+    io.emit('lobbyState', getLobbyState());
+    console.log('[Lobby] ' + name + ' joined (' + lobbyQueue.size + '/' + MAX_HUMAN_PLAYERS + ')');
+  });
+
+  // Lobby leave  
+  socket.on('leaveLobby', () => {
+    if (lobbyQueue.has(socket.id)) {
+      lobbyQueue.delete(socket.id);
+      io.emit('lobbyState', getLobbyState());
+    }
+  });
+
+  // Lobby civ change
+  socket.on('lobbyCiv', (d) => {
+    if (!d || !d.civ || !CIVS[d.civ]) return;
+    const entry = lobbyQueue.get(socket.id);
+    if (entry) { entry.civ = d.civ; io.emit('lobbyState', getLobbyState()); }
+  });
 
   socket.on('join', (d) => {
+    if (roundPhase === 'lobby') return; // must use joinLobby during lobby phase
     if (!d || !d.name) return;
     const sess = socket.request.session;
     const discordId = (sess && sess.discordId) ? sess.discordId : null;
@@ -2803,33 +2887,29 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     const pi = pidMap[socket.id];
     if (pi !== undefined) { const p = players[pi]; if (p && !p.isBot) p.offline = true; delete pidMap[socket.id]; }
+    // Remove from lobby queue if in lobby
+    if (lobbyQueue.has(socket.id)) {
+      lobbyQueue.delete(socket.id);
+      if (roundPhase === 'lobby') io.emit('lobbyState', getLobbyState());
+    }
   });
 });
 
 // ===== STARTUP =====
-console.log('[Territory.io v5 — Round Mode] Starting...');
-terrain = generateEarthMap(W, H);
+console.log('[Territory.io v5 — Lobby Mode] Starting...');
 owner = new Int16Array(W * H).fill(-1);
 troops = new Uint16Array(W * H);
+// Generate initial map for first lobby
+terrain = generateEarthMap(W, H);
 specialTiles = new Uint8Array(W * H);
-
-// Always fresh start in round mode (no save restoration for rounds)
 generateSpecialTiles();
 totalPlayableCells = countPlayableCells();
-spawnBots();
-for (let i = 0; i < 30; i++) spawnCamp();
-// Place all bots
-for (let pi = 0; pi < players.length; pi++) {
-  if (!players[pi].alive) continue;
-  const sp = findSpawn();
-  placePlayerAt(pi, sp.x, sp.y);
-}
-roundStartTime = Date.now();
+// Enter lobby instead of starting directly
 roundNumber = 1;
-roundPhase = 'active';
-console.log('[Round 1] Fresh start — ' + BOT_COUNT + ' bots, ' + totalPlayableCells + ' playable cells');
-
-updateAllVisibility();
+roundPhase = 'lobby';
+lobbyStartTime = Date.now();
+lobbyMapName = MAP_NAMES[Math.floor(Math.random() * MAP_NAMES.length)];
+console.log('[Lobby] First lobby — Map: ' + lobbyMapName + ', ' + totalPlayableCells + ' playable cells');
 
 process.on('uncaughtException', (err) => {
   console.error('[CRASH]', err.stack || err);
