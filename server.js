@@ -29,6 +29,9 @@ io.engine.use(sessionMiddleware);
 
 app.use(express.static('public'));
 
+// Health check for Railway
+app.get('/health', (req, res) => res.status(200).json({ status: 'ok', round: roundNumber, phase: roundPhase }));
+
 // Discord OAuth2 routes
 app.get('/auth/discord', (req, res) => {
   const url = 'https://discord.com/api/oauth2/authorize?client_id=' + DISCORD_CLIENT_ID
@@ -2105,6 +2108,7 @@ function startNewRound() {
   }
   barbs.length = 0;
   clans.length = 0;
+  mapBuildings.clear();
   dirtyChunks.clear();
   // Regenerate map
   terrain = generateEarthMap(W, H);
@@ -2828,14 +2832,14 @@ console.log('[Round 1] Fresh start — ' + BOT_COUNT + ' bots, ' + totalPlayable
 updateAllVisibility();
 
 process.on('uncaughtException', (err) => {
+  console.error('[CRASH]', err.stack || err);
   if (err.code === 'EADDRINUSE') {
-    console.error('[Server] Port in use. Kill other node processes and retry.');
+    console.error('[Server] Port in use. Exiting.');
     process.exit(1);
   }
-  console.error('[CRASH]', err.stack || err);
 });
 process.on('unhandledRejection', (err) => { console.error('[REJECT]', err); });
 
 setInterval(tick, TICK);
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log('[Server] Listening on http://localhost:' + PORT));
+server.listen(PORT, '0.0.0.0', () => console.log('[Server] Listening on http://0.0.0.0:' + PORT));
