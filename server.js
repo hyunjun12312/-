@@ -139,12 +139,12 @@ const COMBO_WINDOW = 5000;
 // ===== CIVILIZATIONS =====
 const CIVS = {
   rome:   { icon:'\uD83C\uDFDB\uFE0F', n:'\uB85C\uB9C8',     desc:'\uAC74\uC124\uC18D\uB3C4 -10%',          bonus:{ buildSpd:0.9 }},
-  mongol: { icon:'\uD83C\uDFC7', n:'\uBAAD\uACE8',     desc:'\uBCD1\uB825\uC0DD\uC0B0 +30%, \uC774\uB3D9\uBE44\uC6A9 -20%',    bonus:{ troopGen:1.3, moveCost:0.8 }},
+  mongol: { icon:'\uD83C\uDFC7', n:'\uBAAD\uACE8',     desc:'\uBCD1\uB825\uC0DD\uC0B0 +15%, \uC774\uB3D9\uBE44\uC6A9 -15%',    bonus:{ troopGen:1.15, moveCost:0.85 }},
   egypt:  { icon:'\uD83C\uDFFA', n:'\uC774\uC9D1\uD2B8',   desc:'\uC790\uC6D0\uCC44\uC9D1 +20%, \uACE8\uB4DC\uC218\uC785 +15%',    bonus:{ gather:1.2, gold:1.15 }},
   viking: { icon:'\u2694\uFE0F', n:'\uBC14\uC774\uD0B9',   desc:'\uACF5\uACA9\uB825 +15%, \uC804\uD22C\uBCF4\uC0C1 +25%',       bonus:{ atk:1.15, combatReward:1.25 }},
   china:  { icon:'\uD83D\uDC09', n:'\uC911\uAD6D',     desc:'\uAE30\uC220\uC5F0\uAD6C -15%, \uCD5C\uB300\uAC74\uBB3C\uB808\uBCA8 +2',   bonus:{ techSpd:0.85, bldgBonus:2 }},
   persia: { icon:'\uD83D\uDC51', n:'\uD398\uB974\uC2DC\uC544', desc:'\uAD50\uC5ED\uBE44\uC728 +20%, \uC678\uAD50\uBC29\uC5B4 +10%',    bonus:{ trade:1.2, dipDef:1.1 }},
-  aztec:  { icon:'\uD83C\uDF3F', n:'\uC544\uC988\uD14D',   desc:'\uC57C\uB9CC\uC871\uBCF4\uC0C1 +40%, \uCF64\uBCF4\uC9C0\uC18D +2\uCD08',   bonus:{ barbReward:1.4, comboWindow:2000 }},
+  aztec:  { icon:'\uD83C\uDF3F', n:'\uC544\uC988\uD14D',   desc:'\uC57C\uB9CC\uC871\uBCF4\uC0C1 +60%, \uCF64\uBCF4\uC9C0\uC18D +2\uCD08, \uD655\uC7A5\uCF64\uBCF4',   bonus:{ barbReward:1.6, comboWindow:2000, expandCombo:true }},
   japan:  { icon:'\u26E9\uFE0F', n:'\uC77C\uBCF8',     desc:'\uBC29\uC5B4\uB825 +20%, \uBCD1\uB825 \uCD5C\uB300\uCE58 +15%',    bonus:{ def:1.2, troopCap:1.15 }}
 };
 
@@ -184,11 +184,11 @@ const STILES = {
   ruins:    { icon:'🏚️', n:'유적',   desc:'랜덤 보상' },
   volcano:  { icon:'🌋', n:'화산',   desc:'주변 대미지' },
   harbor:   { icon:'⚓', n:'항구',   desc:'교역 +30%' },
-  iron:     { icon:'⚒️', n:'철광산', desc:'공격력 +8%' },
-  horses:   { icon:'🐎', n:'목마장', desc:'확장비용 -20%' },
-  shrine:   { icon:'⛩️', n:'신전',   desc:'방어력 +12%' },
+  iron:     { icon:'⚒️', n:'철광산', desc:'공격력 +5% (최대 3개)' },
+  horses:   { icon:'🐎', n:'목마장', desc:'확장비용 -15% (최대 3개)' },
+  shrine:   { icon:'⛩️', n:'신전',   desc:'방어력 +8% (최대 3개)' },
   fertile:  { icon:'🌾', n:'옥토',   desc:'식량 +60%' },
-  watchtower:{ icon:'🗼', n:'감시탑', desc:'시야 +15' }
+  watchtower:{ icon:'🗼', n:'감시탑', desc:'시야 +10' }
 };
 const STILE_KEYS = Object.keys(STILES);
 
@@ -287,10 +287,14 @@ function getPlayerLevel(pi) {
   return Math.floor(Math.sqrt(count)) + 1;
 }
 
-// No hard cap on buildings — territory + resources are natural limits
+// Territory-limited building slots + civ bonus
 function maxPlayerBuildings(pi) {
   const cells = playerCells[pi] ? playerCells[pi].size : 0;
-  return Math.max(5, Math.floor(cells / 10));
+  let max = Math.max(5, Math.floor(cells / 10));
+  // China civ bonus: +2 extra building slots
+  const p = players[pi];
+  if (p) { const cb = CIVS[p.civ]; if (cb && cb.bonus.bldgBonus) max += cb.bonus.bldgBonus; }
+  return max;
 }
 
 function placeBuildingOnMap(pi, cellIdx, type) {
@@ -357,7 +361,7 @@ const TECH = {
   def:   { n:'\uBC29\uC5B4\uB825',   base:{f:60,w:80,s:100,g:30},  time:30, desc:'+8% \uBC29\uC5B4\uB825/Lv', max:20 },
   spd:   { n:'\uD589\uAD70\uC18D\uB3C4', base:{f:50,w:50,s:30,g:40},   time:25, desc:'+5% \uBCD1\uB825\uC7AC\uC0DD\uC18D\uB3C4/Lv', max:20 },
   gth:   { n:'\uCC44\uC9D1\uD6A8\uC728', base:{f:40,w:40,s:40,g:40},   time:25, desc:'+5% \uC790\uC6D0\uCC44\uC9D1/Lv', max:20 },
-  siege: { n:'\uACF5\uC131\uC220',   base:{f:80,w:80,s:60,g:50},   time:35, desc:'+10% \uC131\uBCBD\uD30C\uAD34/Lv', max:15 },
+  siege: { n:'\uACF5\uC131\uC220',   base:{f:80,w:80,s:60,g:50},   time:35, desc:'-6% \uC131\uBCBD/\uC694\uC0C8\uD6A8\uACFC/Lv (\uCD5C\uB300 60%)', max:10 },
   diplo: { n:'\uC678\uAD50\uC220',   base:{f:30,w:30,s:20,g:80},   time:30, desc:'+5% \uCCA9\uBCF4/\uAD50\uC5ED/Lv', max:15 }
 };
 
@@ -512,14 +516,23 @@ function attackPow(p) {
   let a = 1 + (p.tech.atk ? p.tech.atk.l : 0) * 0.08;
   const cb = CIVS[p.civ]; if (cb && cb.bonus.atk) a *= cb.bonus.atk;
   const pi = players.indexOf(p);
-  if (pi >= 0) { const ironCount = Math.min(countSpecialTiles(pi, 6), 5); a *= (1 + ironCount * 0.08); }
+  // Iron mines: max 3 stacks, +5% each
+  if (pi >= 0) { const ironCount = Math.min(countSpecialTiles(pi, 6), 3); a *= (1 + ironCount * 0.05); }
+  // Siege tech: reduces enemy wall/fort effectiveness (applied in combat cost calc)
   return a;
+}
+function siegeBonus(p) {
+  const lv = p.tech.siege ? p.tech.siege.l : 0;
+  return Math.max(0.4, 1 - lv * 0.06); // up to 60% wall/fort reduction at Lv10
 }
 function defensePow(p) {
   let d = 1 + (p.tech.def ? p.tech.def.l : 0) * 0.08;
   const cb = CIVS[p.civ]; if (cb && cb.bonus.def) d *= cb.bonus.def;
+  // Persia dipDef bonus
+  if (cb && cb.bonus.dipDef) d *= cb.bonus.dipDef;
   const pi = players.indexOf(p);
-  if (pi >= 0) { const shrineCount = Math.min(countSpecialTiles(pi, 8), 5); d *= (1 + shrineCount * 0.12); }
+  // Shrines: max 3 stacks, +8% each
+  if (pi >= 0) { const shrineCount = Math.min(countSpecialTiles(pi, 8), 3); d *= (1 + shrineCount * 0.08); }
   return d;
 }
 function isProtected(p) { return p.protection && p.protection > Date.now(); }
@@ -535,7 +548,7 @@ function wallDefenseBonus(p, x, y) {
       const wallRadius = 3 + b.level * 2;
       if (dist <= wallRadius) {
         const proximity = 1 - (dist / wallRadius);
-        totalBonus += b.level * 0.15 * proximity;
+        totalBonus += b.level * 0.12 * proximity;
       }
     }
   }
@@ -807,7 +820,7 @@ function gatherResources() {
       // Terrain attrition: desert/tundra/swamp drain food per cell
       if (t === 3) attritionCost += 1;  // desert upkeep
       if (t === 5) attritionCost += 1;  // tundra upkeep
-      if (t === 9) attritionCost += 2;  // swamp upkeep (worst)
+      if (t === 9) attritionCost += 1;  // swamp upkeep
       const df = Math.floor(r.f * fm * gatherMul * techMul * rate);
       const dw = Math.floor(r.w * wm * gatherMul * techMul * rate);
       const ds = Math.floor(r.s * sm * gatherMul * techMul * rate);
@@ -1581,9 +1594,9 @@ function expandToward(pi, tx, ty) {
   candidates.sort((a, b) => a.score - b.score);
 
   // Dynamic max cells: based on troop count, expand more when strong
-  const baseCells = 8;
-  const troopBonus = Math.floor(p.totalTroops / 15);
-  const maxCells = Math.min(baseCells + troopBonus, 24);
+  const baseCells = 5;
+  const troopBonus = Math.floor(p.totalTroops / 25);
+  const maxCells = Math.min(baseCells + troopBonus, 15);
   
   // Weighted random from top candidates (not always best → organic irregularity)
   const topN = Math.min(candidates.length, maxCells * 3);
@@ -1605,8 +1618,8 @@ function expandToward(pi, tx, ty) {
     // Supply line penalty
     troopCost = Math.max(1, Math.ceil(troopCost * supplyPenalty(p, c.x, c.y)));
     // Horse bonus
-    const horseCount = countSpecialTiles(pi, 7);
-    if (horseCount > 0) troopCost = Math.max(1, Math.ceil(troopCost * Math.max(0.4, 1 - horseCount * 0.20)));
+    const horseCount = Math.min(countSpecialTiles(pi, 7), 3);
+    if (horseCount > 0) troopCost = Math.max(1, Math.ceil(troopCost * Math.max(0.55, 1 - horseCount * 0.15)));
 
     if (cur === -1) {
       if (p.totalTroops < troopCost) continue;
@@ -1614,6 +1627,11 @@ function expandToward(pi, tx, ty) {
       claimCell(c.x, c.y, pi);
       p.stats.cellsClaimed++;
       checkQuestProgress(p, 'expand', 1);
+      // Aztec expandCombo: gain combo from expanding too
+      if (cb && cb.bonus.expandCombo) {
+        const combo = updateCombo(p);
+        if (combo >= 3) p.totalTroops = Math.min(maxTroops(p), p.totalTroops + Math.min(combo, 5));
+      }
       claimedSet.add(c.x + ',' + c.y);
       claimed++;
       const st = specialTiles[i];
@@ -1651,13 +1669,14 @@ function expandToward(pi, tx, ty) {
       const defT = DEFENSE[t] || 1;
       const wallBonus = wallDefenseBonus(enemy, c.x, c.y);
       const capDist2 = enemy.capital ? Math.abs(c.x - enemy.capital.x) + Math.abs(c.y - enemy.capital.y) : 999;
-      const fortBonus = capDist2 <= 5 ? 2.0 : capDist2 <= 15 ? 1.5 : capDist2 <= 30 ? 1.2 : 1.0;
-      const defP = defensePow(enemy) * defT * wallBonus * fortBonus;
+      const fortBonus = capDist2 <= 5 ? 1.5 : capDist2 <= 15 ? 1.3 : capDist2 <= 30 ? 1.15 : 1.0;
+      const sBonus = siegeBonus(p); // siege tech reduces wall/fort effect
+      const defP = defensePow(enemy) * defT * (1 + (wallBonus - 1) * sBonus) * (1 + (fortBonus - 1) * sBonus);
       const combatCost = troopCost + Math.ceil(3 * defP / attackPow(p));
       if (p.totalTroops < combatCost + 1) continue;
       p.totalTroops -= combatCost;
       const combatRwdMul = cb && cb.bonus.combatReward ? cb.bonus.combatReward : 1;
-      const plunderAmt = Math.ceil(5 * combatRwdMul);
+      const plunderAmt = Math.ceil(12 * combatRwdMul);
       p.resources.f += Math.min(plunderAmt, enemy.resources.f); enemy.resources.f = Math.max(0, enemy.resources.f - plunderAmt);
       p.resources.w += Math.min(plunderAmt, enemy.resources.w); enemy.resources.w = Math.max(0, enemy.resources.w - plunderAmt);
       const wasCapital = (enemy.capital && enemy.capital.x === c.x && enemy.capital.y === c.y);
@@ -1784,8 +1803,9 @@ function massiveAttack(pi, tx, ty) {
         const defT = DEFENSE[t] || 1;
         const wallBonus = wallDefenseBonus(enemy, c.x, c.y);
         const capDist2 = enemy.capital ? Math.abs(c.x - enemy.capital.x) + Math.abs(c.y - enemy.capital.y) : 999;
-        const fortBonus = capDist2 <= 5 ? 2.0 : capDist2 <= 15 ? 1.5 : capDist2 <= 30 ? 1.2 : 1.0;
-        const cost = Math.ceil(3 * defensePow(enemy) * defT * wallBonus * fortBonus / attackPow(p));
+        const fortBonus = capDist2 <= 5 ? 1.5 : capDist2 <= 15 ? 1.3 : capDist2 <= 30 ? 1.15 : 1.0;
+        const sBonus = siegeBonus(p);
+        const cost = Math.ceil(3 * defensePow(enemy) * defT * (1 + (wallBonus - 1) * sBonus) * (1 + (fortBonus - 1) * sBonus) / attackPow(p));
         if (budget >= cost) {
           budget -= cost;
           const wasCapital = enemy.capital && enemy.capital.x === c.x && enemy.capital.y === c.y;
