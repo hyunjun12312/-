@@ -17,6 +17,7 @@ var playerName = ''; // user-entered name
 var mapW = 800, mapH = 400, chunkSz = 50;
 var pColors = {};
 var chunks = {};
+var terrainImageCache = {}; // cached terrain-only ImageData per chunk key
 var lb = { p: [], c: [] };
 var mySt = null;
 var BLDG = {}, TECH = {}, CIVS = {}, RANKS = [], STILES = {};
@@ -55,7 +56,7 @@ var massAtkMode = false;
 var keys = {};
 var lastExpTime = 0;
 function emitExp(x, y) {
-  if (!mySt || mySt.tt < 1) return;
+  if (!mySt || mySt.tt < 100) return;
   socket.volatile.emit('exp', {x: x, y: y});
 }
 
@@ -228,7 +229,7 @@ function blendTerrainColors(rgb1, rgb2, factor) {
 
 // Terrain info for tooltip
 var TERRAIN_NAMES = ['바다','평원','숲','사막','산악','툰드라','빙하','얕은물','구릉','늪지'];
-var TERRAIN_COST  = [99,    1,    3,   4,    10,   3,      99,    99,     5,    6   ];
+var TERRAIN_COST  = [9900,  100,  300, 400,  1000, 300,    9900,  9900,   500,  600 ];
 var TERRAIN_DEF   = [0,     1.0,  1.6, 2.0,  4.0,  1.8,    99,    0,      2.5,  1.4 ];
 var TERRAIN_RES_DESC = [
   '',
@@ -245,7 +246,9 @@ var TERRAIN_RES_DESC = [
 
 // Number formatting
 function fmtNum(n) {
-  if (n >= 10000) return (n/1000).toFixed(1) + 'k';
+  n = Math.floor(n);
+  if (n >= 100000000) return (n/100000000).toFixed(1) + '억';
+  if (n >= 10000) return (n/10000).toFixed(n >= 100000 ? 0 : 1) + '만';
   if (n >= 1000) return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   return n.toString();
 }
@@ -591,6 +594,16 @@ function checkTerritoryChange() {
   prevTerritoryCount = cells;
 }
 
+// Clamp camera to map bounds (prevents black screen)
+function clampCamera() {
+  var maxCamX = Math.max(0, mapW - Math.ceil(vpW / zoom));
+  var maxCamY = Math.max(0, mapH - Math.ceil(vpH / zoom));
+  targetCamX = Math.max(0, Math.min(maxCamX, targetCamX));
+  targetCamY = Math.max(0, Math.min(maxCamY, targetCamY));
+  camX = Math.max(0, Math.min(maxCamX, camX));
+  camY = Math.max(0, Math.min(maxCamY, camY));
+}
+
 // ===== EDGE SCROLLING =====
 function handleEdgeScroll() {
   if (!alive || !edgeScrollEnabled || dragging || mouseDown) return;
@@ -600,7 +613,7 @@ function handleEdgeScroll() {
   if (mouseX > canvas.width - edgeScrollMargin) { targetCamX += speed * ((mouseX - (canvas.width - edgeScrollMargin)) / edgeScrollMargin); moved = true; }
   if (mouseY < edgeScrollMargin) { targetCamY -= speed * ((edgeScrollMargin - mouseY) / edgeScrollMargin); moved = true; }
   if (mouseY > canvas.height - edgeScrollMargin) { targetCamY += speed * ((mouseY - (canvas.height - edgeScrollMargin)) / edgeScrollMargin); moved = true; }
-  if (moved) throttledVP();
+  if (moved) { clampCamera(); throttledVP(); }
 }
 var BARB_COLOR = [80, 0, 0];
 var UNKNOWN_TERRITORY_COLOR = [90, 70, 100]; // purple-grey for unknown owner territory
@@ -751,6 +764,9 @@ function showLobbyScreen() {
   document.getElementById('lobbyScreen').style.display = '';
   inLobby = true;
   lobbyJoined = false;
+  // Reset join button visual state
+  var joinBtn = document.getElementById('lobbyJoinBtn');
+  if (joinBtn) { joinBtn.textContent = '🎮 참가'; joinBtn.classList.remove('joined'); }
   // Show user info
   var userEl = document.getElementById('lobbyUserInfo');
   if (userEl && playerName) {
@@ -891,8 +907,14 @@ socket.on('ch', function(data) {
   for (var i = 0; i < data.length; i++) {
     var c = data[i];
     var k = c.cx + ',' + c.cy;
-    chunks[k] = c;
-    renderChunkToBuf(c);
+    if (c.ff) {
+      // Full-fog shortcut from server — only terrain sent
+      chunks[k] = c;
+      renderFullFogChunk(c);
+    } else {
+      chunks[k] = c;
+      renderChunkToBuf(c);
+    }
   }
 });
 
@@ -998,6 +1020,7 @@ socket.on('enterLobby', function(d) {
   // Clear game state
   roundEndData = null;
   chunks = {};
+  terrainImageCache = {};
   activeUnits = [];
   unitInterp = {};
   unitDustParticles = [];
@@ -1036,6 +1059,7 @@ socket.on('roundReset', function(d) {
   // Legacy round reset — handled by enterLobby now
   roundEndData = null;
   chunks = {};
+  terrainImageCache = {};
   activeUnits = [];
   unitInterp = {};
   unitDustParticles = [];
@@ -1218,47 +1242,135 @@ function getNeighborTerrain(c, lx, ly, dx, dy) {
 
 function renderChunkToBuf(c) {
   var sx = c.cx * chunkSz, sy = c.cy * chunkSz;
+  var k = c.cx + ',' + c.cy;
+
+  // Build/get terrain cache (only computed once per chunk, since terrain never changes)
+  if (!terrainImageCache[k] && c.t) {
+    var tImg = bCtx.createImageData(chunkSz, chunkSz);
+    var td = tImg.data;
+    for (var tly = 0; tly < chunkSz; tly++) {
+      for (var tlx = 0; tlx < chunkSz; tlx++) {
+        var tli = tly * chunkSz + tlx;
+        var tpi = tli * 4;
+        var tt = c.t[tli];
+        var tgx = sx + tlx, tgy = sy + tly;
+        var baseRGB = getTerrainRGB(tt, tgx, tgy);
+        var relief = getReliefShading(tt, tgx, tgy, c, tlx, tly);
+        var tr2 = Math.max(0, Math.min(255, (baseRGB[0] * (1 + relief))|0));
+        var tg2 = Math.max(0, Math.min(255, (baseRGB[1] * (1 + relief))|0));
+        var tb2 = Math.max(0, Math.min(255, (baseRGB[2] * (1 + relief))|0));
+        // Terrain transition blending (within chunk)
+        if (isLandTerrain(tt)) {
+          for (var tbd = 0; tbd < 4; tbd++) {
+            var tbdx = tbd===0?-1:tbd===1?1:0;
+            var tbdy = tbd===2?-1:tbd===3?1:0;
+            var tnlx = tlx + tbdx, tnly = tly + tbdy;
+            if (tnlx >= 0 && tnlx < chunkSz && tnly >= 0 && tnly < chunkSz) {
+              var tnt = c.t[tnly * chunkSz + tnlx];
+              if (tnt >= 0 && tnt !== tt && isLandTerrain(tnt)) {
+                var tnRGB = getTerrainRGB(tnt, tgx+tbdx, tgy+tbdy);
+                tr2 = (tr2 * 0.85 + tnRGB[0] * 0.15)|0;
+                tg2 = (tg2 * 0.85 + tnRGB[1] * 0.15)|0;
+                tb2 = (tb2 * 0.85 + tnRGB[2] * 0.15)|0;
+              }
+            }
+          }
+        }
+        // Shore edge (land near water)
+        if (isLandTerrain(tt)) {
+          var tshore = 0;
+          for (var tdd = 0; tdd < 4; tdd++) {
+            var tddx = tdd===0?-1:tdd===1?1:0;
+            var tddy = tdd===2?-1:tdd===3?1:0;
+            var tnlx2 = tlx+tddx, tnly2 = tly+tddy;
+            if (tnlx2 >= 0 && tnlx2 < chunkSz && tnly2 >= 0 && tnly2 < chunkSz) {
+              var tnt3 = c.t[tnly2*chunkSz+tnlx2];
+              if (tnt3 === 0 || tnt3 === 7) { tshore = 2; break; }
+            }
+          }
+          if (tshore === 0) {
+            for (var tdd3 = 0; tdd3 < 4; tdd3++) {
+              var tddx3 = tdd3===0?-2:tdd3===1?2:0;
+              var tddy3 = tdd3===2?-2:tdd3===3?2:0;
+              var tnlx3 = tlx+tddx3, tnly3 = tly+tddy3;
+              if (tnlx3 >= 0 && tnlx3 < chunkSz && tnly3 >= 0 && tnly3 < chunkSz) {
+                var tnt4 = c.t[tnly3*chunkSz+tnlx3];
+                if (tnt4 === 0 || tnt4 === 7) { tshore = 1; break; }
+              }
+            }
+          }
+          if (tshore === 2) {
+            tr2 = (tr2*0.35+SHORE_COLOR[0]*0.65)|0;
+            tg2 = (tg2*0.35+SHORE_COLOR[1]*0.65)|0;
+            tb2 = (tb2*0.35+SHORE_COLOR[2]*0.65)|0;
+          } else if (tshore === 1) {
+            tr2 = (tr2*0.70+SHORE_COLOR[0]*0.30)|0;
+            tg2 = (tg2*0.70+SHORE_COLOR[1]*0.30)|0;
+            tb2 = (tb2*0.70+SHORE_COLOR[2]*0.30)|0;
+          }
+        }
+        // Coastal water (water near land)
+        if (isWaterTerrain(tt)) {
+          var tcoast = 0;
+          for (var tdd2 = 0; tdd2 < 4; tdd2++) {
+            var tddx2 = tdd2===0?-1:tdd2===1?1:0;
+            var tddy2 = tdd2===2?-1:tdd2===3?1:0;
+            var tnlx4 = tlx+tddx2, tnly4 = tly+tddy2;
+            if (tnlx4 >= 0 && tnlx4 < chunkSz && tnly4 >= 0 && tnly4 < chunkSz) {
+              var tnt2 = c.t[tnly4*chunkSz+tnlx4];
+              if (isLandTerrain(tnt2)) { tcoast = 2; break; }
+            }
+          }
+          if (tcoast === 0) {
+            for (var tdd4 = 0; tdd4 < 4; tdd4++) {
+              var tddx4 = tdd4===0?-2:tdd4===1?2:0;
+              var tddy4 = tdd4===2?-2:tdd4===3?2:0;
+              var tnlx5 = tlx+tddx4, tnly5 = tly+tddy4;
+              if (tnlx5 >= 0 && tnlx5 < chunkSz && tnly5 >= 0 && tnly5 < chunkSz) {
+                var tnt5 = c.t[tnly5*chunkSz+tnlx5];
+                if (isLandTerrain(tnt5)) { tcoast = 1; break; }
+              }
+            }
+          }
+          if (tcoast === 2) {
+            tr2 = (tr2*0.4+35*0.6)|0; tg2 = (tg2*0.4+100*0.6)|0; tb2 = (tb2*0.4+140*0.6)|0;
+          } else if (tcoast === 1) {
+            tr2 = (tr2*0.65+28*0.35)|0; tg2 = (tg2*0.65+85*0.35)|0; tb2 = (tb2*0.65+130*0.35)|0;
+          }
+        }
+        td[tpi] = tr2; td[tpi+1] = tg2; td[tpi+2] = tb2; td[tpi+3] = 255;
+      }
+    }
+    terrainImageCache[k] = tImg;
+  }
+
+  // Render using terrain cache + dynamic overlay
   var imgData = bCtx.createImageData(chunkSz, chunkSz);
   var d = imgData.data;
+  var tCache = terrainImageCache[k];
+  if (tCache) d.set(tCache.data); // fast copy terrain base
+
   for (var ly = 0; ly < chunkSz; ly++) {
     for (var lx = 0; lx < chunkSz; lx++) {
       var li = ly * chunkSz + lx;
       var pi = li * 4;
-      var t = c.t[li], o = c.o[li], sp = c.sp ? c.sp[li] : 0;
-      var r, g, b;
+      var o = c.o ? c.o[li] : -1;
+      var sp = c.sp ? c.sp[li] : 0;
+      var fogLevel = c.fog ? c.fog[li] : 0;
       var gx = sx + lx, gy = sy + ly;
+      var r = d[pi], g = d[pi+1], b = d[pi+2];
 
-      // Compute high-quality base terrain color
-      var baseRGB = getTerrainRGB(t, gx, gy);
-
-      // Apply relief shading for 3D depth
-      var relief = getReliefShading(t, gx, gy, c, lx, ly);
-      var shadedR = Math.max(0, Math.min(255, (baseRGB[0] * (1 + relief))|0));
-      var shadedG = Math.max(0, Math.min(255, (baseRGB[1] * (1 + relief))|0));
-      var shadedB = Math.max(0, Math.min(255, (baseRGB[2] * (1 + relief))|0));
-
-      // Terrain transition blending: if neighbor has different terrain, blend slightly
-      if (o < 0 && isLandTerrain(t)) {
-        for (var bd = 0; bd < 4; bd++) {
-          var bdx = bd===0?-1:bd===1?1:0;
-          var bdy = bd===2?-1:bd===3?1:0;
-          var nt = getNeighborTerrain(c, lx, ly, bdx, bdy);
-          if (nt >= 0 && nt !== t && isLandTerrain(nt)) {
-            var nRGB = getTerrainRGB(nt, gx+bdx, gy+bdy);
-            // Subtle 15% blend toward neighbor
-            shadedR = (shadedR * 0.85 + nRGB[0] * 0.15)|0;
-            shadedG = (shadedG * 0.85 + nRGB[1] * 0.15)|0;
-            shadedB = (shadedB * 0.85 + nRGB[2] * 0.15)|0;
-          }
-        }
+      // Fast path for fully fogged cells — just dim terrain
+      if (fogLevel === 1) {
+        d[pi] = (r * 0.22)|0; d[pi+1] = (g * 0.22)|0; d[pi+2] = (b * 0.25)|0;
+        continue;
       }
 
       if (o >= 0 && pColors[o]) {
-        // Player territory: blend player color with terrain
         var pc = hexToRgb(pColors[o]);
-        r = (pc[0]*0.60 + shadedR*0.40)|0;
-        g = (pc[1]*0.60 + shadedG*0.40)|0;
-        b = (pc[2]*0.60 + shadedB*0.40)|0;
+        r = (pc[0]*0.60 + r*0.40)|0;
+        g = (pc[1]*0.60 + g*0.40)|0;
+        b = (pc[2]*0.60 + b*0.40)|0;
         // Territory edge depth
         var borderDist = 3;
         for (var ed = 0; ed < 4; ed++) {
@@ -1291,16 +1403,14 @@ function renderChunkToBuf(c) {
         } else if (borderDist === 1) {
           r = (r * 0.88)|0; g = (g * 0.88)|0; b = (b * 0.88)|0;
         }
-        // Subtle texture noise within territory
         var texN = microNoise(gx, gy) * 6 - 3;
         r = Math.min(255, Math.max(0, (r + texN)|0));
         g = Math.min(255, Math.max(0, (g + texN)|0));
         b = Math.min(255, Math.max(0, (b + texN * 0.7)|0));
       } else if (o === -3) {
-        // Unknown territory
-        r = (UNKNOWN_TERRITORY_COLOR[0]*0.50 + shadedR*0.50)|0;
-        g = (UNKNOWN_TERRITORY_COLOR[1]*0.50 + shadedG*0.50)|0;
-        b = (UNKNOWN_TERRITORY_COLOR[2]*0.50 + shadedB*0.50)|0;
+        r = (UNKNOWN_TERRITORY_COLOR[0]*0.50 + r*0.50)|0;
+        g = (UNKNOWN_TERRITORY_COLOR[1]*0.50 + g*0.50)|0;
+        b = (UNKNOWN_TERRITORY_COLOR[2]*0.50 + b*0.50)|0;
         var uBorder = false;
         for (var ud = 0; ud < 4; ud++) {
           var udx = ud===0?-1:ud===1?1:0;
@@ -1312,75 +1422,12 @@ function renderChunkToBuf(c) {
         }
         if (uBorder) { r = (r * 0.75)|0; g = (g * 0.75)|0; b = (b * 0.75)|0; }
       } else if (o === -2) {
-        // Barbarian territory
-        r = (BARB_COLOR[0]*0.55 + shadedR*0.45)|0;
-        g = (BARB_COLOR[1]*0.55 + shadedG*0.45)|0;
-        b = (BARB_COLOR[2]*0.55 + shadedB*0.45)|0;
-      } else {
-        // Unowned terrain — use full shaded colors
-        r = shadedR; g = shadedG; b = shadedB;
+        r = (BARB_COLOR[0]*0.55 + r*0.45)|0;
+        g = (BARB_COLOR[1]*0.55 + g*0.45)|0;
+        b = (BARB_COLOR[2]*0.55 + b*0.45)|0;
       }
+      // else: unowned — terrain cache is already correct, no overlay needed
 
-      // Shore edge: land pixel next to water → sandy tint (wider, 2-cell check)
-      if (isLandTerrain(t) && o < 0) {
-        var shoreLevel = 0;
-        for (var dd = 0; dd < 4; dd++) {
-          var ddx = dd===0?-1:dd===1?1:0;
-          var ddy = dd===2?-1:dd===3?1:0;
-          var nt3 = getNeighborTerrain(c, lx, ly, ddx, ddy);
-          if (nt3 === 0 || nt3 === 7) { shoreLevel = 2; break; }
-        }
-        if (shoreLevel === 0) {
-          // Check 2-cell distance for subtle shore gradient
-          for (var dd3 = 0; dd3 < 4; dd3++) {
-            var ddx3 = dd3===0?-2:dd3===1?2:0;
-            var ddy3 = dd3===2?-2:dd3===3?2:0;
-            var nt4 = getNeighborTerrain(c, lx, ly, ddx3, ddy3);
-            if (nt4 === 0 || nt4 === 7) { shoreLevel = 1; break; }
-          }
-        }
-        if (shoreLevel === 2) {
-          r = (r * 0.35 + SHORE_COLOR[0] * 0.65)|0;
-          g = (g * 0.35 + SHORE_COLOR[1] * 0.65)|0;
-          b = (b * 0.35 + SHORE_COLOR[2] * 0.65)|0;
-        } else if (shoreLevel === 1) {
-          r = (r * 0.70 + SHORE_COLOR[0] * 0.30)|0;
-          g = (g * 0.70 + SHORE_COLOR[1] * 0.30)|0;
-          b = (b * 0.70 + SHORE_COLOR[2] * 0.30)|0;
-        }
-      }
-
-      // Water pixel next to land → shallow tint for natural coastline
-      if (isWaterTerrain(t) && o < 0) {
-        var coastDist = 0;
-        for (var dd2 = 0; dd2 < 4; dd2++) {
-          var ddx2 = dd2===0?-1:dd2===1?1:0;
-          var ddy2 = dd2===2?-1:dd2===3?1:0;
-          var nt2 = getNeighborTerrain(c, lx, ly, ddx2, ddy2);
-          if (isLandTerrain(nt2)) { coastDist = 2; break; }
-        }
-        if (coastDist === 0) {
-          for (var dd4 = 0; dd4 < 4; dd4++) {
-            var ddx4 = dd4===0?-2:dd4===1?2:0;
-            var ddy4 = dd4===2?-2:dd4===3?2:0;
-            var nt5 = getNeighborTerrain(c, lx, ly, ddx4, ddy4);
-            if (isLandTerrain(nt5)) { coastDist = 1; break; }
-          }
-        }
-        if (coastDist === 2) {
-          // Very close to coast: turquoise shallow
-          r = (r * 0.4 + 35 * 0.6)|0;
-          g = (g * 0.4 + 100 * 0.6)|0;
-          b = (b * 0.4 + 140 * 0.6)|0;
-        } else if (coastDist === 1) {
-          // Near coast: lighter blue
-          r = (r * 0.65 + 28 * 0.35)|0;
-          g = (g * 0.65 + 85 * 0.35)|0;
-          b = (b * 0.65 + 130 * 0.35)|0;
-        }
-      }
-
-      // Special tiles
       if (sp > 0 && o < 0) {
         var sc = SPECIAL_COLORS[sp];
         if (sc) { r = (r*0.5+sc[0]*0.5)|0; g = (g*0.5+sc[1]*0.5)|0; b = (b*0.5+sc[2]*0.5)|0; }
@@ -1388,15 +1435,51 @@ function renderChunkToBuf(c) {
         r = Math.min(255, r+20); g = Math.min(255, g+20); b = Math.min(255, b+10);
       }
 
-      // Fog of war
-      var fogLevel = c.fog ? c.fog[li] : 0;
-      if (fogLevel === 1) {
-        r = (r * 0.22)|0; g = (g * 0.22)|0; b = (b * 0.25)|0;
-      } else if (fogLevel === 2) {
+      if (fogLevel === 2) {
         r = (r * 0.50)|0; g = (g * 0.48)|0; b = (b * 0.55 + 12)|0;
       }
-      d[pi] = r; d[pi+1] = g; d[pi+2] = b; d[pi+3] = 255;
+      d[pi] = r; d[pi+1] = g; d[pi+2] = b;
     }
+  }
+  bCtx.putImageData(imgData, sx, sy);
+}
+
+// Fast render for completely fogged chunks (no per-cell detail needed)
+function renderFullFogChunk(c) {
+  var sx = c.cx * chunkSz, sy = c.cy * chunkSz;
+  var k = c.cx + ',' + c.cy;
+  // Use terrain cache if available, otherwise build simple fog
+  var tCache = terrainImageCache[k];
+  var imgData = bCtx.createImageData(chunkSz, chunkSz);
+  var d = imgData.data;
+  if (tCache) {
+    // Fast: dim cached terrain
+    var td = tCache.data;
+    for (var i = 0; i < td.length; i += 4) {
+      d[i] = (td[i] * 0.22)|0;
+      d[i+1] = (td[i+1] * 0.22)|0;
+      d[i+2] = (td[i+2] * 0.25)|0;
+      d[i+3] = 255;
+    }
+  } else if (c.t) {
+    // No terrain cache yet — use simple palette colors (skip expensive noise)
+    for (var ly = 0; ly < chunkSz; ly++) {
+      for (var lx = 0; lx < chunkSz; lx++) {
+        var li = ly * chunkSz + lx;
+        var pi2 = li * 4;
+        var t = c.t[li];
+        var pal = T_PAL[t];
+        if (pal) {
+          d[pi2] = (pal[0][0] * 0.22)|0;
+          d[pi2+1] = (pal[0][1] * 0.22)|0;
+          d[pi2+2] = (pal[0][2] * 0.25)|0;
+        }
+        d[pi2+3] = 255;
+      }
+    }
+  } else {
+    // No terrain data at all — solid dark
+    for (var j = 3; j < d.length; j += 4) d[j] = 255;
   }
   bCtx.putImageData(imgData, sx, sy);
 }
@@ -1419,6 +1502,9 @@ function draw() {
     if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) { camX = targetCamX; camY = targetCamY; }
     else { camX += dx * camLerp; camY += dy * camLerp; }
   }
+
+  // Clamp camera to prevent black screen
+  clampCamera();
 
   // Dark background
   ctx.fillStyle = '#08081a';
@@ -1696,7 +1782,7 @@ function draw() {
         var htr = hch.tr ? hch.tr[hli] : 0;
         ctx.font = '11px sans-serif';
         ctx.fillStyle = 'rgba(255,100,100,0.9)';
-        ctx.fillText('\u2620 Lv'+(htr>30?3:htr>18?2:1), (hx-camX)*zoom+zoom+3, (hy-camY)*zoom+zoom/2);
+        ctx.fillText('\u2620 Lv'+(htr>3000?3:htr>1800?2:1), (hx-camX)*zoom+zoom+3, (hy-camY)*zoom+zoom/2);
       }
 
       // Terrain tooltip (show when zoomed in enough, skip during mouse hold for performance)
@@ -1712,8 +1798,8 @@ function draw() {
         // Build tooltip lines
         var lines = [];
         lines.push('【' + tName + '】');
-        if (tCost < 99) {
-          lines.push('⚔ 점령비용: ' + tCost + '병력');
+        if (tCost < 9900) {
+          lines.push('⚔ 점령비용: ' + fmtNum(tCost) + '병력');
           lines.push('🛡 방어배율: x' + tDef.toFixed(1));
           if (tRes) lines.push(tRes);
         } else {
@@ -2675,9 +2761,7 @@ function formatSurvivalTime(ms) {
   return s + '초';
 }
 
-function respawnMidGame() {
-  socket.emit('respawnMidGame', { civ: myCiv });
-}
+// (duplicate respawnMidGame removed — see line 834)
 
 // ===== COST HELPERS =====
 function getBldgCost(key, level) {
@@ -2884,8 +2968,11 @@ function sendViewport() {
   });
 }
 
+var vpTimer = null;
 function throttledVP() {
+  if (vpTimer) return;
   sendViewport();
+  vpTimer = setTimeout(function() { vpTimer = null; }, 80);
 }
 
 window.addEventListener('resize', function() { resize(); throttledVP(); });
@@ -2927,6 +3014,7 @@ canvas.addEventListener('mousemove', function(e) {
   if (dragging) {
     targetCamX -= (e.clientX - dragStartX)/zoom;
     targetCamY -= (e.clientY - dragStartY)/zoom;
+    clampCamera();
     camX = targetCamX; camY = targetCamY;
     dragStartX = e.clientX; dragStartY = e.clientY;
     throttledVP();
@@ -2946,6 +3034,7 @@ canvas.addEventListener('wheel', function(e) {
   zoom = Math.round(zoom * 100) / 100;
   targetCamX = mx - mouseX/zoom;
   targetCamY = my - mouseY/zoom;
+  clampCamera();
   camX = targetCamX; camY = targetCamY;
   throttledVP();
   // Show zoom indicator briefly

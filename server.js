@@ -100,9 +100,10 @@ app.get('/auth/logout', (req, res) => {
 
 // ===== CONFIG =====
 const W = 800, H = 400, CHUNK = 50, TICK = 16;
+const TROOP_SCALE = 100; // 병력 스케일 (현실적 숫자: 천/만/십만)
 const RES_INT = 10000, TROOP_INT = 5000;
-const BOT_INT = 2000, CAMP_INT = 15000, LB_INT = 1000, ST_INT = 100, SAVE_INT = 120000;
-const UNIT_BROADCAST_INT = 33;
+const BOT_INT = 2000, CAMP_INT = 15000, LB_INT = 1000, ST_INT = 500, SAVE_INT = 120000;
+const UNIT_BROADCAST_INT = 100;
 const BOT_COUNT = 8;
 const SAVE_FILE = './gamestate.json';
 
@@ -192,7 +193,7 @@ const STILE_KEYS = Object.keys(STILES);
 
 // ===== BUILDINGS =====
 const BLDG = {
-  hq:     { n:'본부', icon:'🏰',   size:3, base:{f:120,w:120,s:80,g:40},  time:25, desc:'+25 병력캡/Lv (3×3)' },
+  hq:     { n:'본부', icon:'🏰',   size:3, base:{f:120,w:120,s:80,g:40},  time:25, desc:'+5,000 병력캡/Lv (3×3)' },
   bar:    { n:'병영', icon:'⚔️',   size:2, base:{f:80,w:60,s:30,g:20},    time:20, desc:'+10% 병력생산/Lv (2×2)' },
   farm:   { n:'농장', icon:'🌾',   size:2, base:{f:60,w:40,s:20,g:10},    time:15, desc:'+12% 식량/Lv (2×2)' },
   lum:    { n:'벌목장', icon:'🪵', size:2, base:{f:40,w:60,s:20,g:10},    time:15, desc:'+12% 목재/Lv (2×2)' },
@@ -365,10 +366,10 @@ const TECH = {
 
 // ===== BARB CAMPS =====
 const CAMP_TYPES = [
-  { name:'\uC815\uCC30\uBCD1', size:1, troops:15,  reward:{f:80,w:80,s:30,g:20} },
-  { name:'\uC57C\uB9CC\uCD0C', size:2, troops:35,  reward:{f:200,w:200,s:80,g:50} },
-  { name:'\uC694\uC0C8',   size:3, troops:70,  reward:{f:500,w:500,s:200,g:120} },
-  { name:'\uC131\uCC44',   size:4, troops:130, reward:{f:1200,w:1200,s:500,g:300} }
+  { name:'\uC815\uCC30\uBCD1', size:1, troops:1500,  reward:{f:80,w:80,s:30,g:20} },
+  { name:'\uC57C\uB9CC\uCD0C', size:2, troops:3500,  reward:{f:200,w:200,s:80,g:50} },
+  { name:'\uC694\uC0C8',   size:3, troops:7000,  reward:{f:500,w:500,s:200,g:120} },
+  { name:'\uC131\uCC44',   size:4, troops:13000, reward:{f:1200,w:1200,s:500,g:300} }
 ];
 
 // ===== MAP DATA =====
@@ -382,16 +383,39 @@ const COLORS = ['#e74c3c','#3498db','#2ecc71','#f39c12','#9b59b6','#1abc9c','#e6
 let nextColor = 0;
 const barbs = [];
 const dirtyChunks = new Set();
+const MAX_DIRTY_CHUNKS_PER_FLUSH = 24;
+const terrainChunkCache = new Map(); // pre-packed terrain arrays per chunk
+const playerChunkIndex = []; // Set<chunkKey> per player for fast fog shortcut
 
 // ===== UNITS SYSTEM =====
 // Unit types: 'army' (claim territory), 'scout' (reveal fog, fast)
 const UNIT_TYPES = {
-  scout: { icon: '🔭', n: '정찰대', speed: 8, troopCost: 5, size: 0, vision: 20, hp: 3 },
-  army:  { icon: '⚔️', n: '원정군', speed: 3, troopCost: 20, size: 6, vision: 8, hp: 10 },
-  elite: { icon: '🛡️', n: '정예군', speed: 2, troopCost: 50, size: 10, vision: 10, hp: 25 }
+  scout: { icon: '🔭', n: '정찰대', speed: 8, troopCost: 500, size: 0, vision: 20, hp: 3 },
+  army:  { icon: '⚔️', n: '원정군', speed: 3, troopCost: 2000, size: 6, vision: 8, hp: 10 },
+  elite: { icon: '🛡️', n: '정예군', speed: 2, troopCost: 5000, size: 10, vision: 10, hp: 25 }
 };
 let nextUnitId = 1;
 const units = []; // { id, type, owner, x, y, tx, ty, strength, hp, maxHp, path:[], alive, spawnTime }
+
+// ===== TERRAIN CHUNK CACHE =====
+function buildTerrainChunkCache() {
+  terrainChunkCache.clear();
+  const cxMax = Math.ceil(W / CHUNK), cyMax = Math.ceil(H / CHUNK);
+  for (let cy = 0; cy < cyMax; cy++) {
+    for (let cx = 0; cx < cxMax; cx++) {
+      const arr = new Array(CHUNK * CHUNK);
+      const sx = cx * CHUNK, sy = cy * CHUNK;
+      for (let ly = 0; ly < CHUNK; ly++) {
+        for (let lx = 0; lx < CHUNK; lx++) {
+          const gx = sx + lx, gy = sy + ly;
+          arr[ly * CHUNK + lx] = (gx >= W || gy >= H) ? 0 : terrain[idx(gx, gy)];
+        }
+      }
+      terrainChunkCache.set(cx + ',' + cy, arr);
+    }
+  }
+  console.log('[TerrainCache] Built ' + terrainChunkCache.size + ' chunks');
+}
 
 // ===== UTILITY =====
 function markDirty(x, y) { dirtyChunks.add(Math.floor(x / CHUNK) + ',' + Math.floor(y / CHUNK)); }
@@ -413,7 +437,7 @@ function flushDirtyToPlayer(pi) {
 // Immediately flush dirty chunks to ALL connected players in viewport
 function flushDirtyToAll() {
   if (dirtyChunks.size === 0) return;
-  const dirty = Array.from(dirtyChunks);
+  const dirty = Array.from(dirtyChunks).slice(0, MAX_DIRTY_CHUNKS_PER_FLUSH);
   for (const [sid, pi] of Object.entries(pidMap)) {
     const sock = io.sockets.sockets.get(sid); if (!sock || !sock.vp) continue;
     const toSend = [];
@@ -425,7 +449,7 @@ function flushDirtyToAll() {
     }
     if (toSend.length > 0) sock.volatile.emit('ch', toSend);
   }
-  dirtyChunks.clear();
+  for (const ck of dirty) dirtyChunks.delete(ck);
 }
 function idx(x, y) { return y * W + x; }
 function validCell(x, y) { return x >= 0 && y >= 0 && x < W && y < H; }
@@ -505,7 +529,7 @@ function countSpecialTiles(pi, stType) {
 
 // ===== SNOWBALL =====
 function maxTroops(p) {
-  let mt = 100 + (p.buildings.hq ? p.buildings.hq.l : 1) * 50;
+  let mt = 10000 + (p.buildings.hq ? p.buildings.hq.l : 0) * 5000;
   const cb = CIVS[p.civ]; if (cb && cb.bonus.troopCap) mt = Math.floor(mt * cb.bonus.troopCap);
   return mt;
 }
@@ -689,7 +713,7 @@ function spawnPlayer(name, civ, isBot) {
     buildings: initBuildings(),
     tech: initTech(),
     quests: [],
-    totalTroops: 80,
+    totalTroops: 8000,
     protection: Date.now() + 30000,
     spawnTime: Date.now(),
     shieldEnd: 0,
@@ -763,7 +787,7 @@ function respawnPlayer(pi, civ, prefX, prefY) {
   for (const ci of toRemove) removeBuilding(ci);
   p.alive = true; p.offline = false; p.civ = civ || p.civ;
   p.resources = initResources(); p.buildings = initBuildings(); p.tech = initTech();
-  p.totalTroops = 80;
+  p.totalTroops = 8000;
   p.protection = Date.now() + 30000; p.spawnTime = Date.now();
   p.shieldEnd = 0;
   p.killStreak = 0; p.questStreak = 0; p.lastExpand = 0; p.stats = initStats();
@@ -839,15 +863,21 @@ function genTroops() {
     const barLv = p.buildings.bar ? p.buildings.bar.l : 0;
     const barMul = 1 + barLv * 0.1;
     const spdLv = p.tech.spd ? p.tech.spd.l : 0;
-    const spdMul = 1 + spdLv * 0.05; // spd tech now boosts troop regen
+    const spdMul = 1 + spdLv * 0.05;
     const cb = CIVS[p.civ];
     const troopMul = cb && cb.bonus.troopGen ? cb.bonus.troopGen : 1;
-    const base = Math.max(2, Math.floor(Math.sqrt(cells.size) * 1.0));
+    const baseRaw = Math.max(2, Math.floor(Math.sqrt(cells.size) * 1.0));
+    const base = baseRaw * TROOP_SCALE; // 100x scale for realistic numbers
     let gen = Math.floor(base * barMul * troopMul * spdMul);
-    const foodCost = gen * 2;
-    if (p.resources.f < foodCost) gen = Math.floor(p.resources.f / 2);
-    if (gen <= 0) continue;
-    p.resources.f -= gen * 2;
+    // Food cost stays at base scale (not 100x) to keep economy balanced
+    const foodCost = Math.ceil(baseRaw * barMul * 2);
+    if (p.resources.f < foodCost) {
+      // Minimum generation: always produce at least 20% even without food
+      gen = Math.max(Math.floor(base * 0.2), Math.floor(p.resources.f / 2) * TROOP_SCALE);
+    }
+    if (gen <= 0) gen = Math.floor(base * 0.1); // guaranteed minimum
+    const actualFoodCost = Math.min(p.resources.f, foodCost);
+    p.resources.f -= actualFoodCost;
     p.totalTroops = Math.min(mt, p.totalTroops + gen);
   }
 }
@@ -884,14 +914,14 @@ function areAllies(pi1, pi2) {
 }
 // Troop cost to claim a cell (expansion = military operation)
 function terrainTroopCost(t) {
-  if (t === 1) return 1;   // 평원 — 가장 쉬움
-  if (t === 2) return 3;   // 숲 — 수풀이 이동 방해
-  if (t === 5) return 3;   // 툰드라 — 혹한
-  if (t === 8) return 5;   // 구릉 — 고지대 점령 어려움
-  if (t === 3) return 4;   // 사막 — 가혹한 환경
-  if (t === 9) return 6;   // 늪지 — 진흙탕, 매우 어려움
-  if (t === 4) return 10;  // 산악 — 극심한 난이도, 대병력 필요
-  return 99;               // 바다/빙하 — 통과 불가
+  if (t === 1) return 100;    // 평원 — 가장 쉬움
+  if (t === 2) return 300;    // 숲 — 수풀이 이동 방해
+  if (t === 5) return 300;    // 툰드라 — 혹한
+  if (t === 8) return 500;    // 구릉 — 고지대 점령 어려움
+  if (t === 3) return 400;    // 사막 — 가혹한 환경
+  if (t === 9) return 600;    // 늪지 — 진흙탕, 매우 어려움
+  if (t === 4) return 1000;   // 산악 — 극심한 난이도, 대병력 필요
+  return 9900;                // 바다/빙하 — 통과 불가
 }
 // Terrain weight for organic expansion scoring (lower = easier to expand through)
 function terrainWeight(t) {
@@ -987,7 +1017,7 @@ function createUnit(pi, type, tx, ty) {
   
   // Check troop cost
   const cost = ut.troopCost;
-  if (p.totalTroops < cost + 5) return null; // keep minimum reserve
+  if (p.totalTroops < cost + 500) return null; // keep minimum reserve
   
   // Unit spawns at capital
   if (!p.capital) return null;
@@ -1158,8 +1188,8 @@ function moveUnits() {
           if (owner[pi2] >= 0 && owner[pi2] !== u.owner) continue; // don't conquer enemy on path
           if (owner[pi2] === -2) continue; // skip barbarians on path
           // Claim empty land along the path
-          const cost = Math.max(1, Math.ceil(terrainTroopCost(t) * 0.3));
-          if (u.strength >= cost + 2) {
+          const cost = Math.max(100, Math.ceil(terrainTroopCost(t) * 0.3));
+          if (u.strength >= cost + 200) {
             u.strength -= cost;
             claimCell(px, py, u.owner);
             const p = players[u.owner];
@@ -1364,7 +1394,7 @@ function onUnitArrived(u) {
       // Already ours, pass through
     } else if (cur === -1) {
       // Empty land: claim
-      const cost = Math.max(1, Math.ceil(terrainTroopCost(t) * 0.5));
+      const cost = Math.max(100, Math.ceil(terrainTroopCost(t) * 0.5));
       if (budget >= cost) {
         budget -= cost;
         claimCell(c.x, c.y, u.owner);
@@ -1373,7 +1403,7 @@ function onUnitArrived(u) {
     } else if (cur === -2) {
       // Barbarian
       const barbTr = troops[ci];
-      const cost = Math.ceil(barbTr / (atkP * 1.5)) + 1;
+      const cost = Math.ceil(barbTr / (atkP * 1.5)) + 100;
       if (budget >= cost) {
         budget -= cost;
         claimCell(c.x, c.y, u.owner);
@@ -1386,7 +1416,7 @@ function onUnitArrived(u) {
       if (enemy && enemy.alive && !areAllies(u.owner, cur) && !isProtected(enemy) && !(enemy.shieldEnd && enemy.shieldEnd > Date.now())) {
         const defT = DEFENSE[t] || 1;
         const defP = defensePow(enemy) * defT;
-        const cost = Math.ceil(3 * defP / atkP) + 1;
+        const cost = Math.ceil(300 * defP / atkP) + 100;
         if (budget >= cost) {
           budget -= cost;
           const wasCapital = (enemy.capital && enemy.capital.x === c.x && enemy.capital.y === c.y);
@@ -1468,7 +1498,7 @@ function getUnitStates(pi) {
 
 function expandToward(pi, tx, ty) {
   const p = players[pi]; if (!p || !p.alive) return;
-  if (p.totalTroops < 1) return;
+  if (p.totalTroops < 100) return;
   const now = Date.now();
   // No throttle — real-time expansion
   p.lastExpand = now;
@@ -1511,16 +1541,16 @@ function expandToward(pi, tx, ty) {
   let claimed = 0;
   const claimedSet = new Set();
   for (const g of gapFills) {
-    if (p.totalTroops < 1) break;
+    if (p.totalTroops < 100) break;
     const gi = idx(g.x, g.y);
     if (owner[gi] === pi) continue;
     const gk = g.x + ',' + g.y;
     if (claimedSet.has(gk)) continue;
     const t = terrain[gi];
     let tc = terrainTroopCost(t);
-    if (cb && cb.bonus.moveCost) tc = Math.max(1, Math.ceil(tc * cb.bonus.moveCost));
+    if (cb && cb.bonus.moveCost) tc = Math.max(100, Math.ceil(tc * cb.bonus.moveCost));
     // Gap fills cost half troops (natural infill)
-    tc = Math.max(1, Math.ceil(tc * 0.5));
+    tc = Math.max(100, Math.ceil(tc * 0.5));
     if (owner[gi] === -1) {
       if (p.totalTroops < tc) continue;
       p.totalTroops -= tc;
@@ -1579,13 +1609,13 @@ function expandToward(pi, tx, ty) {
 
   // Dynamic max cells: based on troop count, expand more when strong
   const baseCells = 5;
-  const troopBonus = Math.floor(p.totalTroops / 25);
+  const troopBonus = Math.floor(p.totalTroops / 2500);
   const maxCells = Math.min(baseCells + troopBonus, 15);
   
   // Weighted random from top candidates (not always best → organic irregularity)
   const topN = Math.min(candidates.length, maxCells * 3);
   const pool = candidates.slice(0, topN);
-  for (let attempts = 0; attempts < topN && claimed < maxCells && p.totalTroops >= 1; attempts++) {
+  for (let attempts = 0; attempts < topN && claimed < maxCells && p.totalTroops >= 100; attempts++) {
     // Weighted selection: index^0.7 bias toward top of list but with randomness
     const r = Math.pow(Math.random(), 0.7);
     const pickIdx = Math.min(pool.length - 1, Math.floor(r * pool.length));
@@ -1597,12 +1627,12 @@ function expandToward(pi, tx, ty) {
     if (owner[i] === pi) continue;
     const t = terrain[i], cur = owner[i];
     let troopCost = terrainTroopCost(t);
-    if (cb && cb.bonus.moveCost) troopCost = Math.max(1, Math.ceil(troopCost * cb.bonus.moveCost));
+    if (cb && cb.bonus.moveCost) troopCost = Math.max(100, Math.ceil(troopCost * cb.bonus.moveCost));
     // Supply line penalty
-    troopCost = Math.max(1, Math.ceil(troopCost * supplyPenalty(p, c.x, c.y)));
+    troopCost = Math.max(100, Math.ceil(troopCost * supplyPenalty(p, c.x, c.y)));
     // Horse bonus
     const horseCount = Math.min(countSpecialTiles(pi, 7), 3);
-    if (horseCount > 0) troopCost = Math.max(1, Math.ceil(troopCost * Math.max(0.55, 1 - horseCount * 0.15)));
+    if (horseCount > 0) troopCost = Math.max(100, Math.ceil(troopCost * Math.max(0.55, 1 - horseCount * 0.15)));
 
     if (cur === -1) {
       if (p.totalTroops < troopCost) continue;
@@ -1622,7 +1652,7 @@ function expandToward(pi, tx, ty) {
     } else if (cur === -2) {
       const barbTr = troops[i];
       const needed = troopCost + Math.ceil(barbTr / (attackPow(p) * 1.5));
-      if (p.totalTroops < needed + 1) continue;
+      if (p.totalTroops < needed + 100) continue;
       p.totalTroops -= needed;
       claimCell(c.x, c.y, pi);
       p.stats.cellsClaimed++;
@@ -1650,8 +1680,8 @@ function expandToward(pi, tx, ty) {
       const fortBonus = capDist2 <= 5 ? 1.5 : capDist2 <= 15 ? 1.3 : capDist2 <= 30 ? 1.15 : 1.0;
       const sBonus = siegeBonus(p); // siege tech reduces wall/fort effect
       const defP = defensePow(enemy) * defT * (1 + (wallBonus - 1) * sBonus) * (1 + (fortBonus - 1) * sBonus);
-      const combatCost = troopCost + Math.ceil(3 * defP / attackPow(p));
-      if (p.totalTroops < combatCost + 1) continue;
+      const combatCost = troopCost + Math.ceil(300 * defP / attackPow(p));
+      if (p.totalTroops < combatCost + 100) continue;
       p.totalTroops -= combatCost;
       const combatRwdMul = cb && cb.bonus.combatReward ? cb.bonus.combatReward : 1;
       const plunderAmt = Math.ceil(12 * combatRwdMul);
@@ -1742,7 +1772,7 @@ function borderPush(pi) {
 
 function massiveAttack(pi, tx, ty) {
   const p = players[pi]; if (!p || !p.alive) return;
-  if (p.totalTroops < 20) { const sock = findSocket(pi); if (sock) sock.emit('msg', '\uBCD1\uB825 \uBD80\uC871! (20\uD544\uC694)'); return; }
+  if (p.totalTroops < 2000) { const sock = findSocket(pi); if (sock) sock.emit('msg', '\uBCD1\uB825 \uBD80\uC871! (2,000\uD544\uC694)'); return; }
   const cells = playerCells[pi]; if (!cells || cells.size === 0) return;
   let budget = Math.floor(p.totalTroops * 0.3);
   p.totalTroops -= budget;
@@ -1765,7 +1795,7 @@ function massiveAttack(pi, tx, ty) {
     const ci = idx(c.x, c.y), t = terrain[ci];
     if (!isPlayable(t)) continue;
     const cur = owner[ci];
-    if (cur === -1) { claimCell(c.x, c.y, pi); budget--; claimed++; }
+    if (cur === -1) { claimCell(c.x, c.y, pi); budget -= 100; claimed++; }
     else if (cur === -2) {
       const cost = Math.ceil(troops[ci] / attackPow(p));
       if (budget >= cost) { budget -= cost; claimCell(c.x, c.y, pi); claimed++; checkCampClear(pi, c.x, c.y); } else continue;
@@ -1777,7 +1807,7 @@ function massiveAttack(pi, tx, ty) {
         const capDist2 = enemy.capital ? Math.abs(c.x - enemy.capital.x) + Math.abs(c.y - enemy.capital.y) : 999;
         const fortBonus = capDist2 <= 5 ? 1.5 : capDist2 <= 15 ? 1.3 : capDist2 <= 30 ? 1.15 : 1.0;
         const sBonus = siegeBonus(p);
-        const cost = Math.ceil(3 * defensePow(enemy) * defT * (1 + (wallBonus - 1) * sBonus) * (1 + (fortBonus - 1) * sBonus) / attackPow(p));
+        const cost = Math.ceil(300 * defensePow(enemy) * defT * (1 + (wallBonus - 1) * sBonus) * (1 + (fortBonus - 1) * sBonus) / attackPow(p));
         if (budget >= cost) {
           budget -= cost;
           const wasCapital = enemy.capital && enemy.capital.x === c.x && enemy.capital.y === c.y;
@@ -2071,7 +2101,7 @@ function getStormRadius() {
 }
 
 function applyStorm() {
-  if (getRoundPhase() !== 'storm') return;
+  if (getRoundPhase() !== 'active') return;  // storm runs during active phase
   currentStormR = getStormRadius();
   const r2 = currentStormR * currentStormR;
   let decayed = 0;
@@ -2103,17 +2133,8 @@ function applyStorm() {
 
 function checkWinConditions() {
   if (roundPhase === 'ending' || roundPhase === 'waiting') return;
-  // Domination check
+  // Domination check (all alive players including bots)
   const liveCells = totalPlayableCells > 0 ? totalPlayableCells : countPlayableCells();
-  for (let pi = 0; pi < players.length; pi++) {
-    const p = players[pi]; if (!p.alive || p.isBot) continue;
-    const cells = playerCells[pi] ? playerCells[pi].size : 0;
-    if (cells >= liveCells * DOMINATION_RATIO) {
-      endRound(pi, 'domination');
-      return;
-    }
-  }
-  // Also check bots for domination (game should end)
   for (let pi = 0; pi < players.length; pi++) {
     const p = players[pi]; if (!p.alive) continue;
     const cells = playerCells[pi] ? playerCells[pi].size : 0;
@@ -2194,6 +2215,7 @@ function enterLobby() {
   playerVisibleChunks.length = 0;
   playerVisionSources.length = 0;
   playerVisionRange.length = 0;
+  playerChunkIndex.length = 0;
   for (const sid in pidMap) delete pidMap[sid];
   barbs.length = 0;
   mapBuildings.clear();
@@ -2205,6 +2227,7 @@ function enterLobby() {
   specialTiles = new Uint8Array(W * H);
   generateSpecialTiles();
   totalPlayableCells = countPlayableCells();
+  buildTerrainChunkCache();
   // Lobby state
   roundPhase = 'lobby';
   lobbyStartTime = Date.now();
@@ -2212,14 +2235,12 @@ function enterLobby() {
   lobbyQueue.clear();
   // Auto-add currently connected players back to lobby queue
   for (const [sid, sock] of io.sockets.sockets) {
-    // All connected sockets get queued for next round
-    const sess = sock.request.session;
-    const discordId = (sess && sess.discordId) ? sess.discordId : null;
-    const name = (sess && sess.discordName) ? sess.discordName : (sock._playerName || 'Player');
+    // Only queue players who have entered a name
+    const name = sock._playerName;
+    if (!name) continue;
     lobbyQueue.set(sid, {
       name,
       civ: 'rome',
-      discordId,
       color: COLORS[lobbyQueue.size % COLORS.length]
     });
   }
@@ -2256,7 +2277,6 @@ function startGameFromLobby() {
   const civKeys = Object.keys(CIVS);
   for (const [sid, data] of lobbyQueue) {
     const pi = spawnPlayer(data.name, data.civ, false);
-    if (data.discordId) players[pi].discordId = data.discordId;
     pidMap[sid] = pi;
   }
   // Add bots
@@ -2406,25 +2426,24 @@ function computeVisibility(pi) {
 function cellVisLevel(gx, gy, pi) {
   const sources = playerVisionSources[pi];
   if (!sources || sources.length === 0) return 1;
-  const ranges = playerVisionRange[pi] || [VISION_FULL, VISION_PARTIAL];
+  const ranges = playerVisionRange[pi] || [VISION_FULL_BASE, VISION_PARTIAL_BASE];
+  const fullR2 = ranges[0] * ranges[0];
+  const partR2 = ranges[1] * ranges[1];
   let minDist = Infinity;
+  let unitPartial = false;
   for (let i = 0; i < sources.length; i++) {
     const s = sources[i];
     const ddx = gx - s.x, ddy = gy - s.y;
     const d2 = ddx * ddx + ddy * ddy;
-    // Unit sources have custom range
     if (s.vf !== undefined) {
-      const vf2 = s.vf * s.vf, vp2 = s.vp * s.vp;
-      if (d2 <= vf2) return 0;
-      if (d2 <= vp2) minDist = Math.min(minDist, 0.5); // mark as partial candidate
+      if (d2 <= s.vf * s.vf) return 0;
+      if (d2 <= s.vp * s.vp) unitPartial = true;
       continue;
     }
+    if (d2 <= fullR2) return 0; // Early exit — source within full range
     if (d2 < minDist) minDist = d2;
   }
-  if (minDist === 0.5) return 2; // unit partial
-  const fullR2 = ranges[0] * ranges[0];
-  const partR2 = ranges[1] * ranges[1];
-  if (minDist <= fullR2) return 0;
+  if (unitPartial) return 2;
   if (minDist <= partR2) return 2;
   return 1;
 }
@@ -2434,9 +2453,21 @@ function updateAllVisibility() {
   playerVisibleChunks.length = players.length;
   playerVisionSources.length = players.length;
   playerVisionRange.length = players.length;
+  playerChunkIndex.length = players.length;
   for (let pi = 0; pi < players.length; pi++) {
-    if (!players[pi].alive) { playerVisibleChunks[pi] = new Set(); playerVisionSources[pi] = []; continue; }
+    if (!players[pi].alive) { playerVisibleChunks[pi] = new Set(); playerVisionSources[pi] = []; playerChunkIndex[pi] = null; continue; }
     playerVisibleChunks[pi] = computeVisibility(pi);
+    // Build chunk index for fast fog shortcut
+    const cells = playerCells[pi];
+    if (cells && cells.size > 0) {
+      const ci = new Set();
+      for (const c of cells) {
+        ci.add(Math.floor((c % W) / CHUNK) + ',' + Math.floor(Math.floor(c / W) / CHUNK));
+      }
+      playerChunkIndex[pi] = ci;
+    } else {
+      playerChunkIndex[pi] = null;
+    }
   }
   // Push refreshed fog to all connected players in their viewport
   for (const [sid, pi] of Object.entries(pidMap)) {
@@ -2459,14 +2490,16 @@ function updateAllVisibility() {
 
 // ===== CHUNK PACKING =====
 function packChunk(cx, cy) {
-  const t = [], o = [], tr = [], sp = [];
+  const ck = cx + ',' + cy;
+  const t = terrainChunkCache.get(ck);
+  const o = [], tr = [], sp = [];
   const sx = cx * CHUNK, sy = cy * CHUNK;
   for (let ly = 0; ly < CHUNK; ly++) {
     for (let lx = 0; lx < CHUNK; lx++) {
       const gx = sx + lx, gy = sy + ly;
-      if (gx >= W || gy >= H) { t.push(0); o.push(-1); tr.push(0); sp.push(0); continue; }
+      if (gx >= W || gy >= H) { o.push(-1); tr.push(0); sp.push(0); continue; }
       const i = idx(gx, gy);
-      t.push(terrain[i]); o.push(owner[i]); tr.push(troops[i]); sp.push(specialTiles[i] || 0);
+      o.push(owner[i]); tr.push(troops[i]); sp.push(specialTiles[i] || 0);
     }
   }
   return { cx, cy, t, o, tr, sp };
@@ -2478,14 +2511,45 @@ function packChunkForPlayer(cx, cy, pi) {
   const ck = cx + ',' + cy;
   const vis = playerVisibleChunks[pi];
   const inRange = vis && vis.has(ck);
-  const t = [], o = [], tr = [], sp = [], fog = [];
+
+  // Full-fog shortcut: chunk not in vision range AND player has no cells here
+  if (!inRange) {
+    const pci = playerChunkIndex[pi];
+    if (!pci || !pci.has(ck)) {
+      return { cx, cy, ff: 1, t: terrainChunkCache.get(ck) };
+    }
+  }
+
+  const t = terrainChunkCache.get(ck);
+  const o = [], tr = [], sp = [], fog = [];
   const sx = cx * CHUNK, sy = cy * CHUNK;
+
+  // Chunk-level full-visibility optimization: if entire chunk is well within full vision range, skip per-cell checks
+  let allVisible = false;
+  if (inRange) {
+    const sources = playerVisionSources[pi];
+    const ranges = playerVisionRange[pi];
+    if (sources && sources.length > 0 && ranges) {
+      const ccx = sx + CHUNK * 0.5, ccy = sy + CHUNK * 0.5;
+      const chunkDiag = CHUNK * 0.72; // ~sqrt(2)/2 * CHUNK
+      let minD2 = Infinity;
+      for (let si = 0; si < sources.length; si++) {
+        const s = sources[si];
+        if (s.vf !== undefined) continue; // skip unit sources
+        const ddx = ccx - s.x, ddy = ccy - s.y;
+        const d2 = ddx * ddx + ddy * ddy;
+        if (d2 < minD2) minD2 = d2;
+      }
+      const fullR = ranges[0] - chunkDiag;
+      if (fullR > 0 && minD2 < fullR * fullR) allVisible = true;
+    }
+  }
+
   for (let ly = 0; ly < CHUNK; ly++) {
     for (let lx = 0; lx < CHUNK; lx++) {
       const gx = sx + lx, gy = sy + ly;
-      if (gx >= W || gy >= H) { t.push(0); o.push(-1); tr.push(0); sp.push(0); fog.push(1); continue; }
+      if (gx >= W || gy >= H) { o.push(-1); tr.push(0); sp.push(0); fog.push(1); continue; }
       const i = idx(gx, gy);
-      t.push(terrain[i]);
       // Own cells always fully visible
       if (owner[i] === pi) {
         o.push(owner[i]); tr.push(troops[i]); sp.push(specialTiles[i] || 0); fog.push(0);
@@ -2496,18 +2560,20 @@ function packChunkForPlayer(cx, cy, pi) {
         o.push(-1); tr.push(0); sp.push(0); fog.push(1);
         continue;
       }
+      // If entire chunk is within full vision, skip per-cell distance check
+      if (allVisible) {
+        o.push(owner[i]); tr.push(troops[i]); sp.push(specialTiles[i] || 0); fog.push(0);
+        continue;
+      }
       // Per-cell circular distance check
       const vl = cellVisLevel(gx, gy, pi);
       if (vl === 0) {
-        // Full vision: see everything
         o.push(owner[i]); tr.push(troops[i]); sp.push(specialTiles[i] || 0); fog.push(0);
       } else if (vl === 2) {
-        // Partial vision: see that territory exists (owner > -1) but not WHO
         const ow = owner[i];
-        o.push(ow >= 0 ? -3 : (ow === -2 ? -3 : -1)); // -3 = "someone's territory" (unknown owner)
+        o.push(ow >= 0 ? -3 : (ow === -2 ? -3 : -1));
         tr.push(0); sp.push(0); fog.push(2);
       } else {
-        // Total fog — show terrain but hide owner/troops/specials
         o.push(-1); tr.push(0); sp.push(0); fog.push(1);
       }
     }
@@ -2520,14 +2586,14 @@ function packChunkForPlayer(cx, cy, pi) {
       if (gx >= W || gy >= H) { bl.push(0); continue; }
       const i = idx(gx, gy);
       const fogLevel = fog[ly * CHUNK + lx];
-      if (fogLevel === 1) { bl.push(0); continue; } // hidden in fog
+      if (fogLevel === 1) { bl.push(0); continue; }
       if (!cellToAnchor.has(i)) { bl.push(0); continue; }
       const anchorIdx = cellToAnchor.get(i);
       const bld = mapBuildings.get(anchorIdx);
       if (!bld) { bl.push(0); continue; }
       const isAnchor = (anchorIdx === i);
       const code = (BLDG_CODES[bld.type] || 0) * 100 + bld.level;
-      const val = isAnchor ? code : (code + 2000); // secondary cells get +2000 offset
+      const val = isAnchor ? code : (code + 2000);
       bl.push(bld.buildEnd > 0 ? -val : val);
     }
   }
@@ -2602,7 +2668,10 @@ function sendQuickState(pi) {
 }
 
 // ===== SAVE / LOAD =====
+let saveInProgress = false;
 function saveGame() {
+  if (saveInProgress) return;
+  saveInProgress = true;
   const cells = [];
   for (let i = 0; i < W * H; i++) { if (owner[i] !== -1) cells.push([i, owner[i], troops[i]]); }
   const pData = players.map(p => ({ ...p, quests: p.quests, stats: p.stats }));
@@ -2610,8 +2679,11 @@ function saveGame() {
   const bldgData = [];
   for (const [ci, b] of mapBuildings) { bldgData.push([ci, b.type, b.level, b.owner, b.buildEnd]); }
   const data = { cells, players: pData, barbs, nextColor, specialTiles: Array.from(specialTiles), mapBuildings: bldgData };
-  try { fs.writeFileSync(SAVE_FILE, JSON.stringify(data)); console.log('[Save] OK'); }
-  catch (e) { console.error('[Save] Error:', e.message); }
+  fs.writeFile(SAVE_FILE, JSON.stringify(data), (e) => {
+    saveInProgress = false;
+    if (e) console.error('[Save] Error:', e.message);
+    else console.log('[Save] OK');
+  });
 }
 
 function loadGame() {
@@ -2654,7 +2726,7 @@ function loadGame() {
         const troopCycles = Math.floor(elapsed / TROOP_INT);
         for (let c = 0; c < troopCycles; c++) {
           const mt = maxTroops(p);
-          if (p.totalTroops < mt) { const base = Math.max(1, Math.floor(Math.sqrt(cells.size) * 0.2)); p.totalTroops = Math.min(mt, p.totalTroops + base); }
+          if (p.totalTroops < mt) { const base = Math.max(100, Math.floor(Math.sqrt(cells.size) * 20)); p.totalTroops = Math.min(mt, p.totalTroops + base); }
         }
       }
       for (const k in p.buildings) { const b = p.buildings[k]; if (b.e > 0 && now >= b.e) { b.l++; b.e = 0; } }
@@ -2679,10 +2751,12 @@ function loadGame() {
 
 // ===== TICK =====
 let lastRes = 0, lastTroop = 0, lastBot = 0, lastCamp = 0, lastLB = 0, lastST = 0, lastSave = 0, lastVis = 0, lastUnitBroadcast = 0, lastCannon = 0;
+let lastFullST = 0;
 let lastStorm = 0, lastRoundInfo = 0;
-const VIS_INT = 300;
+const VIS_INT = 600;
 const CANNON_INT = 1000;
 const ROUND_INFO_INT = 1000;
+const FULL_ST_INT = 2000;
 
 function tick() {
   try {
@@ -2717,6 +2791,12 @@ function tick() {
   if (now - lastLB >= LB_INT) { lastLB = now; io.emit('lb', leaderboard()); }
   if (now - lastST >= ST_INT) {
     lastST = now;
+    for (const [sid, pi] of Object.entries(pidMap)) {
+      sendQuickState(pi);
+    }
+  }
+  if (now - lastFullST >= FULL_ST_INT) {
+    lastFullST = now;
     for (const [sid, pi] of Object.entries(pidMap)) {
       const sock = io.sockets.sockets.get(sid); if (!sock) continue;
       const st = playerState(pi); if (st) sock.volatile.emit('st', st);
@@ -2968,6 +3048,7 @@ terrain = generateEarthMap(W, H);
 specialTiles = new Uint8Array(W * H);
 generateSpecialTiles();
 totalPlayableCells = countPlayableCells();
+buildTerrainChunkCache();
 // Enter lobby instead of starting directly
 roundNumber = 1;
 roundPhase = 'lobby';
