@@ -1724,12 +1724,12 @@ function borderPush(pi) {
       seen.add(key);
       if (owner[ni] === -1 && isPlayable(terrain[ni])) {
         let tc = terrainTroopCost(terrain[ni]);
-        if (cb && cb.bonus.moveCost) tc = Math.max(1, Math.ceil(tc * cb.bonus.moveCost));
+        if (cb && cb.bonus.moveCost) tc = Math.max(100, Math.ceil(tc * cb.bonus.moveCost));
         const fn = friendlyNeighborCount(nx, ny, pi);
         const fn8 = friendlyNeighborCount8(nx, ny, pi);
         // Gap-fill cells get priority (they smooth borders)
         if (fn >= 3 || fn8 >= 5) {
-          gapTargets.push({ x: nx, y: ny, cost: Math.max(1, Math.ceil(tc * 0.5)), fn });
+          gapTargets.push({ x: nx, y: ny, cost: Math.max(100, Math.ceil(tc * 0.5)), fn });
         }
         // Organic noise filter: only expand ~65% of border cells per push (creates irregular blobs)
         const noiseVal = organicNoise(nx, ny, pushSeed);
@@ -2031,9 +2031,9 @@ function botAI() {
       const c = techCost(k, t.l);
       if (canAfford(p, c)) { payCost(p, c); t.e = Date.now() + techTime(k, t.l, p); break; }
     }
-    if (p.totalTroops >= 10) borderPush(pi);
+    if (p.totalTroops >= 1000) borderPush(pi);
     // Bot unit deployment
-    if (units.filter(x => x.alive && x.owner === pi).length < 2 && p.totalTroops > 30 && Math.random() < 0.15) {
+    if (units.filter(x => x.alive && x.owner === pi).length < 2 && p.totalTroops > 3000 && Math.random() < 0.15) {
       const targets2 = [];
       for (const ci of playerCells[pi]) {
         const cx2 = ci % W, cy2 = Math.floor(ci / W);
@@ -2046,11 +2046,11 @@ function botAI() {
       }
       if (targets2.length > 0) {
         const tgt = targets2[Math.floor(Math.random() * targets2.length)];
-        createUnit(pi, p.totalTroops > 60 ? 'elite' : 'army', tgt.x, tgt.y);
+        createUnit(pi, p.totalTroops > 6000 ? 'elite' : 'army', tgt.x, tgt.y);
       }
     }
     // Bot expand toward random direction
-    if (p.totalTroops >= 5) {
+    if (p.totalTroops >= 500) {
       const targets3 = [];
       let cnt = 0;
       for (const ci of playerCells[pi]) {
@@ -2065,7 +2065,7 @@ function botAI() {
       }
       if (targets3.length > 0) {
         const n = Math.min(3, targets3.length);
-        for (let j = 0; j < n && p.totalTroops >= 3; j++) {
+        for (let j = 0; j < n && p.totalTroops >= 300; j++) {
           const tgt = targets3[Math.floor(Math.random() * targets3.length)];
           expandToward(pi, tgt.x, tgt.y);
         }

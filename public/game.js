@@ -878,6 +878,9 @@ socket.on('mi', function(d) {
   buildCivGrid('civGrid', false);
   buildCivGrid('respawnCivGrid', true);
   buf.width = mapW; buf.height = mapH;
+  // Fill buffer with ocean color to avoid black flash
+  bCtx.fillStyle = '#0e204e';
+  bCtx.fillRect(0, 0, buf.width, buf.height);
 });
 
 socket.on('joined', function(d) {
