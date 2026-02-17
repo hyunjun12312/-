@@ -1314,51 +1314,77 @@ function draw() {
     }
   }
 
-  // ===== BUILDING PLACEMENT PREVIEW =====
+  // ===== BUILDING PLACEMENT PREVIEW (NxN grid) =====
   if (buildPlaceMode && alive && zoom >= 4) {
+    var bpDef2 = BLDG[buildPlaceMode];
+    var bpSize2 = bpDef2 ? (bpDef2.size || 1) : 1;
     var phx = Math.floor(mouseX/zoom + camX);
     var phy = Math.floor(mouseY/zoom + camY);
+    // Check all NxN cells for validity
+    var allValid = true;
+    for (var pdy = 0; pdy < bpSize2; pdy++) {
+      for (var pdx = 0; pdx < bpSize2; pdx++) {
+        var pcx = phx + pdx, pcy = phy + pdy;
+        var pck2 = (Math.floor(pcx/chunkSz)) + ',' + (Math.floor(pcy/chunkSz));
+        var pch2 = chunks[pck2];
+        var cellValid = false;
+        if (pch2) {
+          var plx2 = ((pcx%chunkSz)+chunkSz)%chunkSz;
+          var ply2 = ((pcy%chunkSz)+chunkSz)%chunkSz;
+          var po2 = pch2.o[ply2*chunkSz+plx2];
+          cellValid = (po2 === myPi);
+          // Check if cell has existing building
+          if (pch2.bl) {
+            var pblv = pch2.bl[ply2*chunkSz+plx2];
+            if (pblv !== 0) cellValid = false; // occupied
+          }
+        }
+        // Draw per-cell validity
+        var pcpx = (pcx - camX) * zoom;
+        var pcpy = (pcy - camY) * zoom;
+        ctx.fillStyle = cellValid ? 'rgba(0,255,0,0.2)' : 'rgba(255,0,0,0.25)';
+        ctx.fillRect(pcpx, pcpy, zoom, zoom);
+        if (!cellValid) allValid = false;
+      }
+    }
+    // Draw NxN border
     var ppx = (phx - camX) * zoom;
     var ppy = (phy - camY) * zoom;
-    // Check if this is our territory
-    var pck = (Math.floor(phx/chunkSz)) + ',' + (Math.floor(phy/chunkSz));
-    var pch = chunks[pck];
-    var pValid = false;
-    if (pch) {
-      var plx = ((phx%chunkSz)+chunkSz)%chunkSz;
-      var ply = ((phy%chunkSz)+chunkSz)%chunkSz;
-      var po = pch.o[ply*chunkSz+plx];
-      pValid = (po === myPi);
-    }
-    // Green = valid, red = invalid
-    ctx.fillStyle = pValid ? 'rgba(0,255,0,0.3)' : 'rgba(255,0,0,0.3)';
-    ctx.fillRect(ppx, ppy, zoom, zoom);
-    ctx.strokeStyle = pValid ? 'rgba(0,255,0,0.8)' : 'rgba(255,0,0,0.8)';
+    ctx.strokeStyle = allValid ? 'rgba(0,255,0,0.8)' : 'rgba(255,0,0,0.8)';
     ctx.lineWidth = 2;
-    ctx.strokeRect(ppx, ppy, zoom, zoom);
-    // Show building icon at cursor
-    if (BLDG[buildPlaceMode]) {
-      ctx.font = Math.max(12, zoom * 0.9) + 'px sans-serif';
+    ctx.strokeRect(ppx, ppy, bpSize2 * zoom, bpSize2 * zoom);
+    // Show building icon centered in NxN
+    if (bpDef2) {
+      var iconSz = Math.max(12, zoom * bpSize2 * 0.6);
+      ctx.font = iconSz + 'px sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.globalAlpha = 0.7;
-      ctx.fillText(BLDG[buildPlaceMode].icon || '\ud83c\udfd7', ppx + zoom/2, ppy + zoom/2);
+      ctx.fillText(bpDef2.icon || '\ud83c\udfd7', ppx + bpSize2 * zoom / 2, ppy + bpSize2 * zoom / 2);
       ctx.globalAlpha = 1;
     }
+    // Size label
+    if (bpSize2 > 1) {
+      ctx.font = 'bold ' + Math.max(9, zoom * 0.4) + 'px sans-serif';
+      ctx.fillStyle = allValid ? '#0f0' : '#f00';
+      ctx.textAlign = 'center';
+      ctx.fillText(bpSize2 + '\u00d7' + bpSize2, ppx + bpSize2 * zoom / 2, ppy - zoom * 0.3);
+    }
     // Cannon range preview
-    if (buildPlaceMode === 'cannon' && pValid) {
-      var cRange = 6; // level 1 range preview (4 + 1*2)
+    if (buildPlaceMode === 'cannon' && allValid) {
+      var cRange = 6;
       ctx.save();
       ctx.strokeStyle = 'rgba(255,80,0,0.6)';
       ctx.setLineDash([4,4]);
       ctx.lineWidth = 2;
-      // Draw diamond range
+      var cCenterX = ppx + bpSize2 * zoom / 2;
+      var cCenterY = ppy + bpSize2 * zoom / 2;
       ctx.beginPath();
       for (var ri = 0; ri <= cRange * 4; ri++) {
         var rAngle = (ri / (cRange * 4)) * Math.PI * 2;
         var rdx = Math.cos(rAngle) * cRange * zoom;
         var rdy = Math.sin(rAngle) * cRange * zoom;
-        if (ri === 0) ctx.moveTo(ppx + zoom/2 + rdx, ppy + zoom/2 + rdy);
-        else ctx.lineTo(ppx + zoom/2 + rdx, ppy + zoom/2 + rdy);
+        if (ri === 0) ctx.moveTo(cCenterX + rdx, cCenterY + rdy);
+        else ctx.lineTo(cCenterX + rdx, cCenterY + rdy);
       }
       ctx.closePath();
       ctx.stroke();
@@ -1366,11 +1392,10 @@ function draw() {
       ctx.fill();
       ctx.setLineDash([]);
       ctx.restore();
-      // Label
       ctx.font = 'bold ' + Math.max(9, zoom * 0.4) + 'px sans-serif';
       ctx.fillStyle = '#ff5500';
       ctx.textAlign = 'center';
-      ctx.fillText('사거리 ' + cRange, ppx + zoom/2, ppy - zoom * 0.3);
+      ctx.fillText('\uc0ac\uac70\ub9ac ' + cRange, cCenterX, ppy - zoom * 0.6);
     }
   }
 
@@ -1427,16 +1452,20 @@ function draw() {
           if (hbi && hbi !== 0) {
             var hbConst = hbi < 0;
             var hbAbs = Math.abs(hbi);
+            var hbIsSec = hbAbs > 2000;
+            if (hbIsSec) hbAbs -= 2000;
             var hbCode = Math.floor(hbAbs / 100);
             var hbLv = hbAbs % 100;
             var hbType = BLDG_FROM_CODE[hbCode];
             if (hbType && BLDG[hbType]) {
               var hbInfo = BLDG[hbType];
+              var hbSz = hbInfo.size || 1;
               lines.push('');
-              lines.push((hbInfo.icon||'🏗') + ' ' + hbInfo.n + ' Lv.' + hbLv);
-              if (hbConst) lines.push('⏳ 건설 중...');
-              if (ho === myPi) lines.push('👤 내 건물');
-              else if (ho > 0) lines.push('⚠ 적 건물');
+              lines.push((hbInfo.icon||'\ud83c\udfd7') + ' ' + hbInfo.n + ' Lv.' + hbLv + ' (' + hbSz + '\u00d7' + hbSz + ')');
+              if (hbConst) lines.push('\u23f3 \uac74\uc124 \uc911...');
+              if (hbIsSec) lines.push('\ud83d\udfe6 \uac74\ubb3c \uc601\uc5ed');
+              if (ho === myPi) lines.push('\ud83d\udc64 \ub0b4 \uac74\ubb3c' + (hbIsSec ? '' : ' (\ud074\ub9ad\uc2dc \uc5c5\uadf8\ub808\uc774\ub4dc)'));
+              else if (ho > 0) lines.push('\u26a0 \uc801 \uac74\ubb3c');
             }
           }
         }

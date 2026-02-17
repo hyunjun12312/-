@@ -292,6 +292,14 @@ body {
   color: #ffd700; font-size: 12px; font-weight: 700;
   font-family: 'Orbitron', monospace;
 }
+.bld-level {
+  color: #3498db; font-size: 11px; font-weight: 600;
+  margin-left: 8px;
+}
+.bld-size {
+  color: #aaa; font-size: 10px; font-weight: 400;
+  margin-left: 4px;
+}
 .bld-placing {
   background: rgba(46,204,113,0.12); border: 1px solid rgba(46,204,113,0.3);
   border-radius: 8px; padding: 6px 10px; margin-bottom: 8px;
