@@ -2643,7 +2643,6 @@ function renderLeaderboard() {
     html += '<span class="lb-cells">'+(p.rankIcon||'')+fmtNum(p.cells)+'</span></div>';
   }
   pEl.innerHTML = html;
-  }
 }
 
 function showDeathStats() {

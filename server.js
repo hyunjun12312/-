@@ -197,7 +197,7 @@ const BLDG = {
   farm:   { n:'농장', icon:'🌾',   size:2, base:{f:60,w:40,s:20,g:10},    time:15, desc:'+12% 식량/Lv (2×2)' },
   lum:    { n:'벌목장', icon:'🪵', size:2, base:{f:40,w:60,s:20,g:10},    time:15, desc:'+12% 목재/Lv (2×2)' },
   qry:    { n:'채석장', icon:'⛏️', size:2, base:{f:40,w:40,s:60,g:10},    time:15, desc:'+12% 석재/Lv (2×2)' },
-  wall:   { n:'성벽', icon:'🧱',   size:1, base:{f:60,w:80,s:100,g:30},   time:30, desc:'+15% 주변방어/Lv (1×1)' },
+  wall:   { n:'성벽', icon:'🧱',   size:1, base:{f:60,w:80,s:100,g:30},   time:30, desc:'+12% 주변방어/Lv (1×1)' },
   acad:   { n:'학술원', icon:'📚', size:2, base:{f:80,w:60,s:40,g:60},    time:25, desc:'-4% 건설/연구시간/Lv (2×2)' },
   spy:    { n:'첩보기관', icon:'🕵️', size:1, base:{f:50,w:30,s:20,g:80},  time:20, desc:'스파이 정보량 증가/Lv (1×1)' },
   market: { n:'시장', icon:'🏪',   size:2, base:{f:40,w:40,s:30,g:50},    time:18, desc:'+8% 교역효율/Lv (2×2)' },
@@ -2604,7 +2604,7 @@ function sendQuickState(pi) {
 function saveGame() {
   const cells = [];
   for (let i = 0; i < W * H; i++) { if (owner[i] !== -1) cells.push([i, owner[i], troops[i]]); }
-  const pData = players.map(p => ({ ...p, quests: p.quests, combo: p.combo, stats: p.stats }));
+  const pData = players.map(p => ({ ...p, quests: p.quests, stats: p.stats }));
   // Save map buildings
   const bldgData = [];
   for (const [ci, b] of mapBuildings) { bldgData.push([ci, b.type, b.level, b.owner, b.buildEnd]); }
@@ -2622,7 +2622,7 @@ function loadGame() {
       const p = { ...pd };
       if (!p.isBot) p.offline = true;
       if (!p.quests) p.quests = [];
-      if (!p.combo) p.combo = { count: 0, lastTime: 0 };
+
       if (!p.stats) p.stats = initStats();
       if (!p.civ) p.civ = 'rome';
       if (p.shieldEnd === undefined) p.shieldEnd = 0;

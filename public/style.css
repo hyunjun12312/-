@@ -586,15 +586,7 @@ body {
   0% { opacity: 0; transform: translateX(-50%) translateY(12px); }
   100% { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
-.combo-notif {
-  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  z-index: 70; color: #ff6b35;
-  font-family: 'Orbitron', sans-serif;
-  font-size: 56px; font-weight: 900;
-  text-shadow: 0 0 24px rgba(255,107,53,0.8), 0 0 48px rgba(255,107,53,0.4), 0 4px 8px rgba(0,0,0,0.5);
-  animation: comboPop 1.2s ease-out forwards;
-  pointer-events: none; letter-spacing: 3px;
-}
+
 .streak-notif {
   position: fixed; top: 15%; left: 50%; transform: translateX(-50%);
   z-index: 70;
@@ -651,11 +643,7 @@ body {
   pointer-events: none; animation: flashEffect 0.4s ease-out forwards;
 }
 
-@keyframes comboPop {
-  0% { transform: translate(-50%,-50%) scale(0.4); opacity: 1; }
-  40% { transform: translate(-50%,-50%) scale(1.35); opacity: 1; }
-  100% { transform: translate(-50%,-50%) scale(1.6); opacity: 0; }
-}
+
 @keyframes streakSlide {
   0% { transform: translateX(-50%) translateY(-30px); opacity: 0; }
   12% { transform: translateX(-50%) translateY(0); opacity: 1; }
