@@ -10,14 +10,14 @@
 <body>
   <canvas id="gameCanvas"></canvas>
 
-  <!-- Start Screen (Discord Login only) -->
+  <!-- Start Screen -->
   <div id="ss" class="screen">
     <div class="login-box">
       <h1>🏰 Territory.io</h1>
       <p class="subtitle">전략적 영토 정복 게임</p>
       <div id="loginSection">
-        <p class="login-hint">디스코드로 로그인하면 진행내역이 저장됩니다</p>
-        <a href="/auth/discord" class="btn btn-discord">👾 Discord로 로그인</a>
+        <input id="nameInput" type="text" placeholder="이름을 입력하세요" maxlength="16" class="name-input" />
+        <button onclick="enterWithName()" class="btn btn-gold">🎮 게임 시작</button>
       </div>
     </div>
   </div>

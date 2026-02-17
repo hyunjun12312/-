@@ -12,7 +12,8 @@ var myPi = -1, myColor = '#fff', alive = false, myCiv = 'rome';
 var spawnX = -1, spawnY = -1;
 var respawnX = -1, respawnY = -1;
 var terrainPreviewData = null;
-var discordUser = null; // { id, name, avatar }
+var discordUser = null; // legacy — no longer used
+var playerName = ''; // user-entered name
 var mapW = 800, mapH = 400, chunkSz = 50;
 var pColors = {};
 var chunks = {};
@@ -728,8 +729,17 @@ function setupSpawnMapClick(canvasId, markerId, coordId, isRespawn) {
 }
 
 // ===== START / RESPAWN / LOBBY =====
+function enterWithName() {
+  var inp = document.getElementById('nameInput');
+  var n = inp ? inp.value.trim() : '';
+  if (!n) { alert('이름을 입력하세요!'); return; }
+  playerName = n.substring(0, 16);
+  document.getElementById('ss').style.display = 'none';
+  showLobbyScreen();
+}
+
 function checkLogin() {
-  if (!discordUser) return;
+  if (!playerName) return;
   document.getElementById('ss').style.display = 'none';
   showLobbyScreen();
 }
@@ -743,9 +753,8 @@ function showLobbyScreen() {
   lobbyJoined = false;
   // Show user info
   var userEl = document.getElementById('lobbyUserInfo');
-  if (userEl && discordUser) {
-    userEl.innerHTML = '<span class="lobby-username">' + (discordUser.name || 'Player') + '</span>' +
-      ' <a href="/auth/logout" class="lobby-logout">로그아웃</a>';
+  if (userEl && playerName) {
+    userEl.innerHTML = '<span class="lobby-username">' + playerName + '</span>';
   }
   // Build civ grid for lobby
   buildCivGrid('lobbyCivGrid', false);
@@ -755,11 +764,10 @@ function showLobbyScreen() {
 }
 
 function joinLobby() {
-  if (!discordUser) { window.location.href = '/auth/discord'; return; }
+  if (!playerName) return;
   if (lobbyJoined) return;
   lobbyJoined = true;
-  var name = discordUser.name || 'Player';
-  socket.emit('joinLobby', { name: name, civ: myCiv });
+  socket.emit('joinLobby', { name: playerName, civ: myCiv });
   var btn = document.getElementById('lobbyJoinBtn');
   if (btn) { btn.textContent = '✅ 참가 완료'; btn.classList.add('joined'); }
 }
@@ -815,9 +823,8 @@ function respawnMidGame() {
 }
 
 function startGame() {
-  if (!discordUser) { window.location.href = '/auth/discord'; return; }
-  var name = discordUser.name || 'Player';
-  var data = { name: name, civ: myCiv };
+  if (!playerName) return;
+  var data = { name: playerName, civ: myCiv };
   if (spawnX >= 0 && spawnY >= 0) { data.sx = spawnX; data.sy = spawnY; }
   socket.emit('join', data);
   spawnX = -1; spawnY = -1;
@@ -1004,7 +1011,7 @@ socket.on('enterLobby', function(d) {
   var reo = document.getElementById('roundEndOverlay');
   if (reo) reo.style.display = 'none';
   // Show lobby
-  if (discordUser) {
+  if (playerName) {
     showLobbyScreen();
     updateLobbyUI();
   }
@@ -3108,11 +3115,8 @@ if (qbarZoomOut) qbarZoomOut.addEventListener('click', function() {
   throttledVP();
 });
 
-// Check Discord login status
-fetch('/auth/me').then(function(r) { return r.json(); }).then(function(d) {
-  if (d.loggedIn) {
-    discordUser = { id: d.id, name: d.name, avatar: d.avatar };
-    // Transition to lobby screen
-    checkLogin();
-  }
-}).catch(function() {});
+// No longer require Discord login — player enters name on start screen
+var nameInp = document.getElementById('nameInput');
+if (nameInp) nameInp.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') enterWithName();
+});

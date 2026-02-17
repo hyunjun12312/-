@@ -96,7 +96,21 @@ body {
 }
 .btn-discord:hover { box-shadow: 0 8px 30px rgba(88,101,242,0.5); background: linear-gradient(135deg, #6872f5, #5260d8); }
 
-/* ═══════ DISCORD ═══════ */
+/* ═══════ NAME INPUT ═══════ */
+.name-input {
+  width: 100%; box-sizing: border-box;
+  padding: 14px 18px; margin: 12px 0;
+  font-size: 16px; font-weight: 600;
+  color: #fff; background: rgba(255,255,255,0.06);
+  border: 2px solid rgba(255,255,255,0.15);
+  border-radius: 12px; outline: none;
+  text-align: center; letter-spacing: 0.5px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.name-input::placeholder { color: rgba(255,255,255,0.35); font-weight: 400; }
+.name-input:focus { border-color: rgba(245,166,35,0.6); box-shadow: 0 0 12px rgba(245,166,35,0.2); }
+
+/* ═══════ DISCORD (unused but kept) ═══════ */
 .login-hint { color: #5a5a7a; font-size: 12px; margin: 14px 0; line-height: 1.6; }
 .discord-user {
   display: flex; align-items: center; gap: 12px;

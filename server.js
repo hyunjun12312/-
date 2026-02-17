@@ -2212,15 +2212,16 @@ function enterLobby() {
   lobbyQueue.clear();
   // Auto-add currently connected players back to lobby queue
   for (const [sid, sock] of io.sockets.sockets) {
+    // All connected sockets get queued for next round
     const sess = sock.request.session;
-    if (sess && sess.discordId) {
-      lobbyQueue.set(sid, {
-        name: sess.discordName || 'Player',
-        civ: 'rome',
-        discordId: sess.discordId,
-        color: COLORS[lobbyQueue.size % COLORS.length]
-      });
-    }
+    const discordId = (sess && sess.discordId) ? sess.discordId : null;
+    const name = (sess && sess.discordName) ? sess.discordName : (sock._playerName || 'Player');
+    lobbyQueue.set(sid, {
+      name,
+      civ: 'rome',
+      discordId,
+      color: COLORS[lobbyQueue.size % COLORS.length]
+    });
   }
   // Broadcast lobby state
   const tp = buildTerrainPreview();
@@ -2754,6 +2755,7 @@ io.on('connection', (socket) => {
     const sess = socket.request.session;
     const discordId = (sess && sess.discordId) ? sess.discordId : null;
     const name = (d && d.name) ? String(d.name).substring(0, 20) : (sess && sess.discordName ? sess.discordName : 'Player');
+    socket._playerName = name; // remember for auto-rejoin
     const civ = (d && d.civ && CIVS[d.civ]) ? d.civ : 'rome';
     const color = COLORS[lobbyQueue.size % COLORS.length];
     lobbyQueue.set(socket.id, { name, civ, discordId, color });
