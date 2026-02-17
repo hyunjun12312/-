@@ -24,7 +24,14 @@ const sessionMiddleware = session({
 });
 app.use(sessionMiddleware);
 
-const io = new Server(server, { cors: { origin: '*' } });
+const io = new Server(server, {
+  cors: { origin: '*' },
+  transports: ['websocket'],
+  pingInterval: 5000,
+  pingTimeout: 10000,
+  maxHttpBufferSize: 1e6,
+  perMessageDeflate: false
+});
 // Share session with socket.io
 io.engine.use(sessionMiddleware);
 
@@ -92,10 +99,10 @@ app.get('/auth/logout', (req, res) => {
 });
 
 // ===== CONFIG =====
-const W = 800, H = 400, CHUNK = 50, TICK = 50;
+const W = 800, H = 400, CHUNK = 50, TICK = 33;
 const RES_INT = 10000, TROOP_INT = 5000;
-const BOT_INT = 2000, CAMP_INT = 15000, LB_INT = 2000, ST_INT = 800, SAVE_INT = 120000;
-const UNIT_BROADCAST_INT = 150;
+const BOT_INT = 2000, CAMP_INT = 15000, LB_INT = 1500, ST_INT = 400, SAVE_INT = 120000;
+const UNIT_BROADCAST_INT = 80;
 const BOT_COUNT = 8;
 const SAVE_FILE = './gamestate.json';
 
@@ -1367,7 +1374,7 @@ function expandToward(pi, tx, ty) {
   const p = players[pi]; if (!p || !p.alive) return;
   if (p.totalTroops < 1) return;
   const now = Date.now();
-  if (now - (p.lastExpand || 0) < 50) return;
+  if (now - (p.lastExpand || 0) < 30) return;
   p.lastExpand = now;
   const cb = CIVS[p.civ];
   const expandSeed = (p.capital ? p.capital.x * 137 + p.capital.y * 311 : pi * 997) + (now % 10000);
@@ -1426,7 +1433,7 @@ function expandToward(pi, tx, ty) {
       checkQuestProgress(p, 'expand', 1);
       claimedSet.add(gk);
       claimed++;
-      if (claimed >= 6) break; // max 6 gap fills per tick (more aggressive filling)
+      if (claimed >= 8) break; // max 8 gap fills per tick
     }
   }
 
@@ -1475,9 +1482,9 @@ function expandToward(pi, tx, ty) {
   candidates.sort((a, b) => a.score - b.score);
 
   // Dynamic max cells: based on troop count, expand more when strong
-  const baseCells = 3;
-  const troopBonus = Math.floor(p.totalTroops / 40);
-  const maxCells = Math.min(baseCells + troopBonus, 8);
+  const baseCells = 4;
+  const troopBonus = Math.floor(p.totalTroops / 30);
+  const maxCells = Math.min(baseCells + troopBonus, 12);
   
   // Weighted random from top candidates (not always best → organic irregularity)
   const topN = Math.min(candidates.length, maxCells * 3);
@@ -2603,9 +2610,9 @@ function loadGame() {
 // ===== TICK =====
 let lastRes = 0, lastTroop = 0, lastBot = 0, lastCamp = 0, lastLB = 0, lastST = 0, lastSave = 0, lastVis = 0, lastUnitBroadcast = 0, lastCannon = 0;
 let lastStorm = 0, lastRoundInfo = 0;
-const VIS_INT = 500;
-const CANNON_INT = 1000; // coastal cannons fire every 1 second
-const ROUND_INFO_INT = 1000; // broadcast round info every 1s
+const VIS_INT = 400;
+const CANNON_INT = 1000;
+const ROUND_INFO_INT = 1000;
 
 function tick() {
   try {

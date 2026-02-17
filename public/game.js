@@ -1,5 +1,5 @@
 ﻿// ===== Territory.io v5 — Ultimate Strategy Client =====
-var socket = io();
+var socket = io({ transports: ['websocket'], upgrade: false });
 var canvas = document.getElementById('gameCanvas');
 var ctx = canvas.getContext('2d', { alpha: false });
 var mmCanvas = document.getElementById('minimap');
@@ -55,13 +55,11 @@ var keys = {};
 var lastExpTime = 0;
 function emitExp(x, y) {
   var now = Date.now();
-  if (now - lastExpTime < 16) return; // ~60fps cap
+  if (now - lastExpTime < 10) return; // faster input rate
   lastExpTime = now;
-  // Only send if we have troops
   if (!mySt || mySt.tt < 1) return;
-  socket.emit('exp', {x: x, y: y});
-  // Spawn expansion particles
-  for (var pi = 0; pi < 3; pi++) {
+  socket.volatile.emit('exp', {x: x, y: y});
+  for (var pi = 0; pi < 2; pi++) {
     spawnParticle(x + Math.random() - 0.5, y + Math.random() - 0.5, myColor, 'expand');
   }
 }
@@ -259,12 +257,12 @@ function fmtNum(n) {
 
 // Smooth camera
 var targetCamX = 0, targetCamY = 0;
-var camLerp = 0.18;
+var camLerp = 0.25;
 var smoothCam = true;
 
 // ===== PARTICLE SYSTEM =====
 var particles = [];
-var MAX_PARTICLES = 200;
+var MAX_PARTICLES = 100;
 function spawnParticle(x, y, color, type) {
   if (particles.length >= MAX_PARTICLES) particles.shift();
   var angle = Math.random() * Math.PI * 2;
@@ -274,7 +272,7 @@ function spawnParticle(x, y, color, type) {
     vx: Math.cos(angle) * speed,
     vy: Math.sin(angle) * speed,
     life: 1.0,
-    decay: 0.015 + Math.random() * 0.02,
+    decay: 0.025 + Math.random() * 0.03,
     color: color,
     size: type === 'expand' ? 2 + Math.random()*2 : 1.5 + Math.random()*1.5,
     type: type
@@ -1106,11 +1104,8 @@ function draw() {
     camY += (targetCamY - camY) * camLerp;
   }
 
-  // Dark background with subtle gradient
-  var bg = ctx.createLinearGradient(0, 0, 0, h);
-  bg.addColorStop(0, '#08081a');
-  bg.addColorStop(1, '#0a0a14');
-  ctx.fillStyle = bg;
+  // Dark background
+  ctx.fillStyle = '#08081a';
   ctx.fillRect(0, 0, w, h);
 
   var srcX = Math.max(0, camX);
@@ -1307,7 +1302,7 @@ function draw() {
     }
   }
 
-  // Hover highlight + terrain tooltip
+  // Hover highlight + terrain tooltip (skip tooltip when mouse held for performance)
   if (alive && zoom >= 4) {
     var hx = Math.floor(mouseX/zoom + camX);
     var hy = Math.floor(mouseY/zoom + camY);
@@ -1333,8 +1328,8 @@ function draw() {
         ctx.fillText('\u2620 Lv'+(htr>30?3:htr>18?2:1), (hx-camX)*zoom+zoom+3, (hy-camY)*zoom+zoom/2);
       }
 
-      // Terrain tooltip (show when zoomed in enough)
-      if (zoom >= 6 && ht !== undefined) {
+      // Terrain tooltip (show when zoomed in enough, skip during mouse hold for performance)
+      if (zoom >= 6 && ht !== undefined && !mouseDown) {
         var tName = TERRAIN_NAMES[ht] || '알 수 없음';
         var tCost = TERRAIN_COST[ht];
         var tDef  = TERRAIN_DEF[ht];
@@ -1636,7 +1631,7 @@ function drawUnitDust(w, h) {
     ctx.globalAlpha = 1;
   }
   // Cap particles
-  if (unitDustParticles.length > 200) unitDustParticles.splice(0, unitDustParticles.length - 200);
+  if (unitDustParticles.length > 80) unitDustParticles.splice(0, unitDustParticles.length - 80);
 }
 
 function drawUnits(w, h) {
@@ -1894,9 +1889,7 @@ function drawMinimap() {
   mmCtx.drawImage(buf, 0, 0, mapW, mapH, 0, 0, mmW, mmH);
   var sx = mmW/mapW, sy = mmH/mapH;
   mmCtx.strokeStyle = 'rgba(255,255,255,0.85)'; mmCtx.lineWidth = 1.5;
-  mmCtx.shadowColor = 'rgba(255,255,255,0.4)'; mmCtx.shadowBlur = 4;
   mmCtx.strokeRect(camX*sx, camY*sy, (vpW/zoom)*sx, (vpH/zoom)*sy);
-  mmCtx.shadowBlur = 0;
 }
 
 // ===== STORM OVERLAY =====
@@ -1937,9 +1930,10 @@ function drawTerritoryBorders(w, h) {
   var vx0 = Math.floor(camX), vy0 = Math.floor(camY);
   var vx1 = Math.ceil(camX + w/zoom), vy1 = Math.ceil(camY + h/zoom);
   var baseWidth = Math.max(1.2, zoom * 0.22);
+  ctx.lineWidth = baseWidth;
   
-  // Pass 1: Outer glow (wider, transparent)
-  ctx.lineWidth = baseWidth + Math.max(1, zoom * 0.12);
+  // Batch borders by color for fewer state changes
+  var bordersByColor = {};
   for (var vy = vy0; vy < vy1; vy++) {
     for (var vx = vx0; vx < vx1; vx++) {
       var ck = (Math.floor(vx/chunkSz)) + ',' + (Math.floor(vy/chunkSz));
@@ -1951,12 +1945,10 @@ function drawTerritoryBorders(w, h) {
       if (o < 0) continue;
       var color = pColors[o];
       if (!color) continue;
-      var rgb = hexToRgb(color);
       var screenX = (vx - camX) * zoom;
       var screenY = (vy - camY) * zoom;
-      var dirs = [[1,0],[0,1],[-1,0],[0,-1]];
       for (var di = 0; di < 4; di++) {
-        var nx = vx+dirs[di][0], ny = vy+dirs[di][1];
+        var nx = vx+(di===0?1:di===2?-1:0), ny = vy+(di===1?1:di===3?-1:0);
         var nOwner = -1;
         if (nx >= 0 && ny >= 0 && nx < mapW && ny < mapH) {
           var nck = (Math.floor(nx/chunkSz))+','+(Math.floor(ny/chunkSz));
@@ -1968,60 +1960,28 @@ function drawTerritoryBorders(w, h) {
           }
         }
         if (nOwner !== o) {
-          ctx.strokeStyle = 'rgba('+rgb[0]+','+rgb[1]+','+rgb[2]+',0.2)';
-          ctx.beginPath();
-          if (di === 0) { ctx.moveTo(screenX+zoom, screenY); ctx.lineTo(screenX+zoom, screenY+zoom); }
-          else if (di === 1) { ctx.moveTo(screenX, screenY+zoom); ctx.lineTo(screenX+zoom, screenY+zoom); }
-          else if (di === 2) { ctx.moveTo(screenX, screenY); ctx.lineTo(screenX, screenY+zoom); }
-          else { ctx.moveTo(screenX, screenY); ctx.lineTo(screenX+zoom, screenY); }
-          ctx.stroke();
+          if (!bordersByColor[color]) bordersByColor[color] = [];
+          if (di === 0) bordersByColor[color].push(screenX+zoom, screenY, screenX+zoom, screenY+zoom);
+          else if (di === 1) bordersByColor[color].push(screenX, screenY+zoom, screenX+zoom, screenY+zoom);
+          else if (di === 2) bordersByColor[color].push(screenX, screenY, screenX, screenY+zoom);
+          else bordersByColor[color].push(screenX, screenY, screenX+zoom, screenY);
         }
       }
     }
   }
-  
-  // Pass 2: Main border (crisp, bright)
-  ctx.lineWidth = baseWidth;
-  for (var vy2 = vy0; vy2 < vy1; vy2++) {
-    for (var vx2 = vx0; vx2 < vx1; vx2++) {
-      var ck2 = (Math.floor(vx2/chunkSz)) + ',' + (Math.floor(vy2/chunkSz));
-      var ch2 = chunks[ck2];
-      if (!ch2) continue;
-      var lx2 = ((vx2%chunkSz)+chunkSz)%chunkSz;
-      var ly2 = ((vy2%chunkSz)+chunkSz)%chunkSz;
-      var o2 = ch2.o[ly2*chunkSz+lx2];
-      if (o2 < 0) continue;
-      var color2 = pColors[o2];
-      if (!color2) continue;
-      var screenX2 = (vx2 - camX) * zoom;
-      var screenY2 = (vy2 - camY) * zoom;
-      var dirs2 = [[1,0],[0,1],[-1,0],[0,-1]];
-      for (var di2 = 0; di2 < 4; di2++) {
-        var nx2 = vx2+dirs2[di2][0], ny2 = vy2+dirs2[di2][1];
-        var nOwner2 = -1;
-        if (nx2 >= 0 && ny2 >= 0 && nx2 < mapW && ny2 < mapH) {
-          var nck2 = (Math.floor(nx2/chunkSz))+','+(Math.floor(ny2/chunkSz));
-          var nch2 = chunks[nck2];
-          if (nch2) {
-            var nlx2 = ((nx2%chunkSz)+chunkSz)%chunkSz;
-            var nly2 = ((ny2%chunkSz)+chunkSz)%chunkSz;
-            nOwner2 = nch2.o[nly2*chunkSz+nlx2];
-          }
-        }
-        if (nOwner2 !== o2) {
-          ctx.strokeStyle = color2;
-          ctx.globalAlpha = 0.85;
-          ctx.beginPath();
-          if (di2 === 0) { ctx.moveTo(screenX2+zoom, screenY2); ctx.lineTo(screenX2+zoom, screenY2+zoom); }
-          else if (di2 === 1) { ctx.moveTo(screenX2, screenY2+zoom); ctx.lineTo(screenX2+zoom, screenY2+zoom); }
-          else if (di2 === 2) { ctx.moveTo(screenX2, screenY2); ctx.lineTo(screenX2, screenY2+zoom); }
-          else { ctx.moveTo(screenX2, screenY2); ctx.lineTo(screenX2+zoom, screenY2); }
-          ctx.stroke();
-          ctx.globalAlpha = 1;
-        }
-      }
+  // Draw all borders batched by color
+  ctx.globalAlpha = 0.85;
+  for (var c in bordersByColor) {
+    var segs = bordersByColor[c];
+    ctx.strokeStyle = c;
+    ctx.beginPath();
+    for (var si = 0; si < segs.length; si += 4) {
+      ctx.moveTo(segs[si], segs[si+1]);
+      ctx.lineTo(segs[si+2], segs[si+3]);
     }
+    ctx.stroke();
   }
+  ctx.globalAlpha = 1;
 }
 
 // ===== PLAYER LABELS ON MAP =====
@@ -2513,7 +2473,7 @@ function sendViewport() {
 var vpTimer = 0;
 function throttledVP() {
   var now = Date.now();
-  if (now - vpTimer > 100) { vpTimer = now; sendViewport(); }
+  if (now - vpTimer > 60) { vpTimer = now; sendViewport(); }
 }
 
 window.addEventListener('resize', function() { resize(); throttledVP(); });
