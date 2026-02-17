@@ -380,7 +380,6 @@ const COLORS = ['#e74c3c','#3498db','#2ecc71','#f39c12','#9b59b6','#1abc9c','#e6
   '#00bcd4','#8bc34a','#ff5722','#607d8b','#795548','#cddc39','#009688','#673ab7',
   '#ff9800','#4caf50','#f44336','#2196f3'];
 let nextColor = 0;
-const clans = [];
 const barbs = [];
 const dirtyChunks = new Set();
 
@@ -684,7 +683,7 @@ function spawnPlayer(name, civ, isBot) {
   const color = COLORS[nextColor % COLORS.length]; nextColor++;
   const p = {
     id: pi, name, color, civ: civ || 'rome', alive: true, isBot: !!isBot,
-    discordId: null, offline: false, clanId: -1,
+    discordId: null, offline: false,
     capital: { x: 0, y: 0 },
     resources: initResources(),
     buildings: initBuildings(),
@@ -788,7 +787,6 @@ function removePlayer(pi) {
   for (const [ci, b] of mapBuildings) { if (b.owner === pi) toRemove.push(ci); }
   for (const ci of toRemove) removeBuilding(ci);
   p.alive = false;
-  if (p.clanId >= 0) leaveClan(pi);
   recalcPlayerBuildings(pi);
 }
 
@@ -882,9 +880,7 @@ function checkBuildings() {
 
 // ===== COMBAT =====
 function areAllies(pi1, pi2) {
-  const p1 = players[pi1], p2 = players[pi2];
-  if (!p1 || !p2) return false;
-  return p1.clanId >= 0 && p1.clanId === p2.clanId;
+  return false;
 }
 // Troop cost to claim a cell (expansion = military operation)
 function terrainTroopCost(t) {
@@ -1839,29 +1835,6 @@ function findSocket(pi) {
   return null;
 }
 
-// ===== CLANS =====
-function createClan(pi, name, tag) {
-  const p = players[pi]; if (!p || p.clanId >= 0) return;
-  const ci = clans.length;
-  clans.push({ name, tag, color: p.color, leaderId: pi, members: new Set([pi]) });
-  p.clanId = ci;
-  return ci;
-}
-function joinClan(pi, ci) {
-  const p = players[pi]; if (!p || p.clanId >= 0 || !clans[ci]) return false;
-  clans[ci].members.add(pi); p.clanId = ci; return true;
-}
-function leaveClan(pi) {
-  const p = players[pi]; if (!p || p.clanId < 0) return;
-  const c = clans[p.clanId]; if (c) c.members.delete(pi); p.clanId = -1;
-}
-function clanListData() {
-  return clans.map((c, i) => ({
-    id: i, name: c.name, tag: c.tag, color: c.color, members: c.members.size,
-    cells: Array.from(c.members).reduce((sum, pi) => (playerCells[pi] ? sum + playerCells[pi].size : sum), 0)
-  })).filter(c => c.members > 0);
-}
-
 // ===== BARB CAMPS =====
 function spawnCamp() {
   const typeIdx = Math.random() < 0.4 ? 0 : Math.random() < 0.6 ? 1 : Math.random() < 0.8 ? 2 : 3;
@@ -2223,7 +2196,6 @@ function enterLobby() {
   playerVisionRange.length = 0;
   for (const sid in pidMap) delete pidMap[sid];
   barbs.length = 0;
-  clans.length = 0;
   mapBuildings.clear();
   cellToAnchor.clear();
   dirtyChunks.clear();
@@ -2567,13 +2539,12 @@ function leaderboard() {
   for (let pi = 0; pi < players.length; pi++) {
     const p = players[pi]; if (!p.alive) continue;
     const cells = playerCells[pi] ? playerCells[pi].size : 0;
-    const clan = p.clanId >= 0 && clans[p.clanId] ? clans[p.clanId] : null;
     const civDef = CIVS[p.civ] || CIVS.rome;
     const rank = getRank(cells);
-    pList.push({ i: pi, name: p.name, color: p.color, cells, ct: clan ? '[' + clan.tag + '] ' : '', civIcon: civDef.icon, rankIcon: rank.icon });
+    pList.push({ i: pi, name: p.name, color: p.color, cells, ct: '', civIcon: civDef.icon, rankIcon: rank.icon });
   }
   pList.sort((a, b) => b.cells - a.cells);
-  return { p: pList.slice(0, 15), c: clanListData().sort((a, b) => b.cells - a.cells).slice(0, 10) };
+  return { p: pList.slice(0, 15) };
 }
 
 // ===== PLAYER STATE =====
@@ -2634,11 +2605,10 @@ function saveGame() {
   const cells = [];
   for (let i = 0; i < W * H; i++) { if (owner[i] !== -1) cells.push([i, owner[i], troops[i]]); }
   const pData = players.map(p => ({ ...p, quests: p.quests, combo: p.combo, stats: p.stats }));
-  const cData = clans.map(c => ({ ...c, members: Array.from(c.members) }));
   // Save map buildings
   const bldgData = [];
   for (const [ci, b] of mapBuildings) { bldgData.push([ci, b.type, b.level, b.owner, b.buildEnd]); }
-  const data = { cells, players: pData, clans: cData, barbs, nextColor, specialTiles: Array.from(specialTiles), mapBuildings: bldgData };
+  const data = { cells, players: pData, barbs, nextColor, specialTiles: Array.from(specialTiles), mapBuildings: bldgData };
   try { fs.writeFileSync(SAVE_FILE, JSON.stringify(data)); console.log('[Save] OK'); }
   catch (e) { console.error('[Save] Error:', e.message); }
 }
@@ -2663,7 +2633,6 @@ function loadGame() {
       players.push(p);
       playerCells.push(new Set());
     }
-    if (data.clans) { for (const cd of data.clans) clans.push({ ...cd, members: new Set(cd.members) }); }
     for (const [i, o, t] of data.cells) { owner[i] = o; troops[i] = t || 0; if (o >= 0 && playerCells[o]) playerCells[o].add(i); }
     if (data.barbs) barbs.push(...data.barbs);
     if (data.nextColor) nextColor = data.nextColor;
@@ -2850,7 +2819,6 @@ io.on('connection', (socket) => {
     io.emit('pc', { [pi]: players[pi].color });
     socket.emit('joined', { pi, color: players[pi].color, sx: players[pi].capital.x, sy: players[pi].capital.y, civ: players[pi].civ });
     const st = playerState(pi); if (st) socket.emit('st', st);
-    socket.emit('cl', clanListData());
   });
 
   // Ping measurement (simple echo for round-trip timing)
@@ -2965,17 +2933,6 @@ io.on('connection', (socket) => {
       sendQuickState(pi);
     }
   });
-
-  socket.on('cclan', (d) => {
-    if (!d) return; const pi = pidMap[socket.id]; if (pi === undefined) return;
-    const ci = createClan(pi, String(d.name || 'Clan').substring(0, 20), String(d.tag || 'CLN').substring(0, 5));
-    if (ci !== undefined) { socket.emit('cj', { ci, clan: clans[ci] ? { name: clans[ci].name, tag: clans[ci].tag } : null }); io.emit('clu', clanListData()); }
-  });
-  socket.on('jclan', (d) => {
-    if (!d || d.ci === undefined) return; const pi = pidMap[socket.id]; if (pi === undefined) return;
-    if (joinClan(pi, d.ci)) { socket.emit('cj', { ci: d.ci, clan: clans[d.ci] ? { name: clans[d.ci].name, tag: clans[d.ci].tag } : null }); io.emit('clu', clanListData()); }
-  });
-  socket.on('lclan', () => { const pi = pidMap[socket.id]; if (pi === undefined) return; leaveClan(pi); socket.emit('cl_left'); io.emit('clu', clanListData()); });
 
   socket.on('respawn', (d) => {
     const pi = pidMap[socket.id]; if (pi === undefined) return;

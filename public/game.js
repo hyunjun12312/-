@@ -922,10 +922,7 @@ socket.on('lb', function(d) {
   renderLeaderboard();
 });
 
-socket.on('cl', function(d) { renderClanList(d); });
-socket.on('clu', function(d) { renderClanList(d); });
-socket.on('cj', function() { if (mySt) updateUI(); });
-socket.on('cl_left', function() { if (mySt) updateUI(); });
+
 
 socket.on('msg', function(m) {
   lastMsg = m; msgTimer = Date.now() + 3000;
@@ -2646,38 +2643,7 @@ function renderLeaderboard() {
     html += '<span class="lb-cells">'+(p.rankIcon||'')+fmtNum(p.cells)+'</span></div>';
   }
   pEl.innerHTML = html;
-  var cEl = document.getElementById('clb');
-  if (cEl && lb.c && lb.c.length > 0) {
-    var ch = '<div class="lb-clan">\uD83C\uDFF4 클랜 순위</div>';
-    for (var j = 0; j < lb.c.length; j++) {
-      var c = lb.c[j];
-      ch += '<div class="lb-item"><span class="lb-color" style="background:'+c.color+'"></span>';
-      ch += '<span class="lb-name">['+c.tag+'] '+c.name+'</span>';
-      ch += '<span class="lb-cells">'+c.cells+'</span></div>';
-    }
-    cEl.innerHTML = ch;
   }
-}
-
-function renderClanList(clans) {
-  var el = document.getElementById('clanPanel');
-  if (!el) return;
-  var html = '<div class="clan-list">';
-  if (clans && clans.length > 0) {
-    for (var i = 0; i < clans.length; i++) {
-      html += '<div class="clan-item" onclick="joinClan('+clans[i].id+')">';
-      html += '<span>['+clans[i].tag+'] '+clans[i].name+'</span>';
-      html += '<span style="color:#888;font-size:0.8em">'+clans[i].members+'명</span></div>';
-    }
-  } else {
-    html += '<div style="color:#666;font-size:0.85em">클랜이 없습니다</div>';
-  }
-  html += '</div><div class="clan-create">';
-  html += '<input id="clanName" placeholder="클랜 이름" maxlength="20">';
-  html += '<input id="clanTag" placeholder="태그 (3글자)" maxlength="5">';
-  html += '<button onclick="createClan()">클랜 생성</button>';
-  html += '<button onclick="leaveClan()" style="margin-top:4px;background:#e74c3c">클랜 탈퇴</button></div>';
-  el.innerHTML = html;
 }
 
 function showDeathStats() {
@@ -2814,13 +2780,7 @@ function deployUnit(type) {
 function cancelUnit(uid) {
   socket.emit('cancelUnit', { id: uid });
 }
-function createClan() {
-  var n = (document.getElementById('clanName')||{}).value || 'Clan';
-  var t = (document.getElementById('clanTag')||{}).value || 'CLN';
-  socket.emit('cclan', {name:n, tag:t});
-}
-function joinClan(ci) { socket.emit('jclan', {ci:ci}); }
-function leaveClan() { socket.emit('lclan'); }
+
 function spyOn(pi) { if (pi !== myPi) socket.emit('spy', {target:pi}); }
 function closeSpyModal() { document.getElementById('spyModal').style.display='none'; }
 
@@ -2996,14 +2956,13 @@ document.addEventListener('keydown', function(e) {
   if (e.key === '6') deployUnit('army');
   if (e.key === '7') deployUnit('elite');
   // Tab shortcuts: 1-6 switch side panel tabs (only when not in number unit deploy)
-  var tabKeys = { '!': 'lbTab', '@': 'bldTab', '#': 'techTab', '$': 'questTab', '%': 'tradeTab', '^': 'clanTab' };
+  var tabKeys = { '!': 'lbTab', '@': 'bldTab', '#': 'techTab', '$': 'questTab', '%': 'tradeTab' };
   if (e.shiftKey && tabKeys[e.key]) { switchTab(tabKeys[e.key]); if (sidePanelCollapsed) toggleSidePanel(); }
   if (!e.shiftKey && e.key === '1') { switchTab('lbTab'); if (sidePanelCollapsed) toggleSidePanel(); }
   if (!e.shiftKey && e.key === '2') { switchTab('bldTab'); if (sidePanelCollapsed) toggleSidePanel(); }
   if (!e.shiftKey && e.key === '3') { switchTab('techTab'); if (sidePanelCollapsed) toggleSidePanel(); }
   if (!e.shiftKey && e.key === '4') { switchTab('questTab'); if (sidePanelCollapsed) toggleSidePanel(); }
   if (e.key === '8') { switchTab('tradeTab'); if (sidePanelCollapsed) toggleSidePanel(); }
-  if (e.key === '9') { switchTab('clanTab'); if (sidePanelCollapsed) toggleSidePanel(); }
   if (e.key === 'Home' || e.key === 'h') { centerOnCapital(); }
   if (e.key === 'w' || e.key === 'ArrowUp') { targetCamY -= 5; throttledVP(); }
   if (e.key === 'a' || e.key === 'ArrowLeft') { targetCamX -= 5; throttledVP(); }
