@@ -141,6 +141,54 @@ body {
 .civ-desc { color: #7a7a9a; font-size: 12px; min-height: 20px; line-height: 1.5; }
 
 /* ═══════ DEATH ═══════ */
+.death-box {
+  animation: deathAppear 0.6s ease-out;
+}
+@keyframes deathAppear {
+  0% { opacity: 0; transform: translateY(30px) scale(0.9); }
+  50% { transform: translateY(-5px) scale(1.02); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+.death-skull {
+  font-size: 64px;
+  margin-bottom: 8px;
+  animation: skullPulse 2s ease-in-out infinite;
+  filter: drop-shadow(0 0 20px rgba(231,76,60,0.5));
+}
+@keyframes skullPulse {
+  0%,100% { transform: scale(1); filter: drop-shadow(0 0 20px rgba(231,76,60,0.5)); }
+  50% { transform: scale(1.1); filter: drop-shadow(0 0 30px rgba(231,76,60,0.8)); }
+}
+.death-subtitle { color: #e74c3c; font-size: 14px; margin-bottom: 12px; }
+.death-score {
+  text-align: center; font-size: 18px; color: #ffd700;
+  margin-bottom: 12px; padding: 8px;
+  background: linear-gradient(135deg, rgba(255,215,0,0.1), rgba(255,170,0,0.05));
+  border-radius: 8px; border: 1px solid rgba(255,215,0,0.2);
+}
+.death-stat-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-size: 13px;
+}
+.death-stat-row span:first-child { width: 24px; text-align: center; }
+.death-stat-row span:nth-child(2) { flex: 1; color: #888; }
+.death-stat-row b { color: #e0e0e8; font-family: 'Orbitron', monospace; }
+.death-stat-icon { font-size: 16px; }
+.death-survival {
+  margin-top: 8px; padding-top: 8px; text-align: center;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  color: #888; font-size: 12px;
+}
+.death-respawn-btn {
+  margin-top: 14px;
+  animation: respawnBtnPulse 1.5s ease-in-out infinite;
+}
+@keyframes respawnBtnPulse {
+  0%,100% { box-shadow: 0 4px 15px rgba(245,166,35,0.3); }
+  50% { box-shadow: 0 4px 25px rgba(245,166,35,0.6); }
+}
 .death-stats {
   margin: 12px 0; font-size: 13px; line-height: 2;
   text-align: left; padding: 12px 16px;
@@ -325,6 +373,22 @@ body {
 .lb-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .lb-cells { color: #ffd700; font-weight: 800; font-size: 12px; font-family: 'Orbitron', monospace; }
 .lb-clan { color: #6a6a8a; font-size: 12px; font-weight: 800; margin: 10px 0 6px; letter-spacing: 1px; }
+.lb-me {
+  background: rgba(52,152,219,0.15) !important;
+  border: 1px solid rgba(52,152,219,0.2) !important;
+}
+.lb-change {
+  font-size: 9px; font-weight: 700; min-width: 18px; text-align: center;
+  padding: 1px 3px; border-radius: 4px;
+  font-family: 'Orbitron', monospace;
+  animation: rankChangeFlash 1s ease-out;
+}
+.lb-up { color: #2ecc71; background: rgba(46,204,113,0.1); }
+.lb-down { color: #e74c3c; background: rgba(231,76,60,0.1); }
+@keyframes rankChangeFlash {
+  0% { transform: scale(1.5); opacity: 0.5; }
+  100% { transform: scale(1); opacity: 1; }
+}
 
 /* ═══════ BUILDINGS & TECH ═══════ */
 .bld-header {
@@ -388,6 +452,22 @@ body {
 .item-timer { color: #e67e22; font-size: 12px; font-weight: 700; }
 .cost-ok { color: #2ecc71; font-weight: 600; }
 .cost-bad { color: #e74c3c; font-weight: 600; }
+.item-maxed { color: #2ecc71; font-size: 11px; font-weight: 600; opacity: 0.7; }
+.tech-progress {
+  height: 4px; background: rgba(255,255,255,0.06); border-radius: 2px;
+  overflow: hidden; margin-top: 4px;
+}
+.tech-progress-fill {
+  height: 100%; border-radius: 2px;
+  background: linear-gradient(90deg, #9b59b6, #8e44ad, #9b59b6);
+  background-size: 200% 100%;
+  animation: techShimmer 1.5s linear infinite;
+  transition: width 1s linear;
+}
+@keyframes techShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
 
 /* ═══════ QUESTS ═══════ */
 .quest-streak {

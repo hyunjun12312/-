@@ -2853,6 +2853,9 @@ io.on('connection', (socket) => {
     socket.emit('cl', clanListData());
   });
 
+  // Ping measurement (simple echo for round-trip timing)
+  socket.on('ping_check', (_, cb) => { if (typeof cb === 'function') cb(); });
+
   socket.on('vp', (d) => {
     if (!d) return;
     const pi = pidMap[socket.id];

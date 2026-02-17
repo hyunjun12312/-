@@ -280,6 +280,27 @@ var zoomShowTimer = 0;
 var toastQueue = [];
 var MAX_TOASTS = 5;
 
+// FPS & Ping tracking
+var fpsFrames = 0, fpsCurrent = 0, fpsLastTime = performance.now();
+var pingMs = 0, pingInterval = null;
+
+// Screen shake
+var shakeIntensity = 0, shakeDecay = 0.9;
+
+// Leaderboard rank tracking
+var prevLbRanks = {}; // { playerIndex: previousRank }
+var lbRankChanges = {}; // { playerIndex: +/- change }
+
+// Animated resource counters
+var displayRes = { f: 0, w: 0, s: 0, g: 0, tt: 0, mt: 0 };
+var targetRes = { f: 0, w: 0, s: 0, g: 0, tt: 0, mt: 0 };
+
+// Live research timer
+var researchTimerInterval = null;
+
+// Territory count tracking
+var prevTerritoryCount = 0;
+
 // ===== PARTICLE SYSTEM =====
 var particles = [];
 var MAX_PARTICLES = 100;
@@ -463,6 +484,111 @@ socket.on('connect', function() { updateConnStatus('connected'); });
 socket.on('disconnect', function() { updateConnStatus('disconnected'); showToast('⚠️ 서버 연결이 끊겼습니다', 'error', 5000); });
 socket.on('reconnecting', function() { updateConnStatus('reconnecting'); });
 socket.on('reconnect', function() { updateConnStatus('connected'); showToast('✅ 서버에 재연결됨', 'success', 2000); });
+
+// ===== FPS & PING TRACKING =====
+function updateFPS() {
+  fpsFrames++;
+  var now = performance.now();
+  if (now - fpsLastTime >= 1000) {
+    fpsCurrent = fpsFrames;
+    fpsFrames = 0;
+    fpsLastTime = now;
+  }
+}
+function startPingMeasurement() {
+  if (pingInterval) return;
+  pingInterval = setInterval(function() {
+    var start = Date.now();
+    socket.volatile.emit('ping_check', null, function() {
+      pingMs = Date.now() - start;
+    });
+  }, 3000);
+}
+
+// ===== SCREEN SHAKE =====
+function triggerShake(intensity) {
+  shakeIntensity = Math.min(12, intensity);
+}
+function applyShake() {
+  if (shakeIntensity < 0.3) { shakeIntensity = 0; return; }
+  var sx = (Math.random() - 0.5) * shakeIntensity * 2;
+  var sy = (Math.random() - 0.5) * shakeIntensity * 2;
+  ctx.translate(sx, sy);
+  shakeIntensity *= shakeDecay;
+}
+
+// ===== LEADERBOARD RANK TRACKING =====
+function trackRankChanges(newLb) {
+  var newRanks = {};
+  for (var i = 0; i < newLb.length; i++) {
+    var p = newLb[i];
+    newRanks[p.i] = i + 1;
+    if (prevLbRanks[p.i] !== undefined) {
+      var diff = prevLbRanks[p.i] - (i + 1);
+      if (diff !== 0) lbRankChanges[p.i] = diff;
+      else delete lbRankChanges[p.i];
+    }
+  }
+  prevLbRanks = newRanks;
+}
+
+// ===== ANIMATED RESOURCE COUNTERS =====
+function lerpRes(current, target, speed) {
+  if (current === target) return target;
+  var diff = target - current;
+  if (Math.abs(diff) < 2) return target;
+  return current + diff * speed;
+}
+function updateAnimatedCounters() {
+  if (!mySt || !mySt.r) return;
+  targetRes.f = mySt.r.f;
+  targetRes.w = mySt.r.w;
+  targetRes.s = mySt.r.s;
+  targetRes.g = mySt.r.g;
+  targetRes.tt = mySt.tt;
+  targetRes.mt = mySt.mt;
+  var speed = 0.15;
+  displayRes.f = lerpRes(displayRes.f, targetRes.f, speed);
+  displayRes.w = lerpRes(displayRes.w, targetRes.w, speed);
+  displayRes.s = lerpRes(displayRes.s, targetRes.s, speed);
+  displayRes.g = lerpRes(displayRes.g, targetRes.g, speed);
+  displayRes.tt = lerpRes(displayRes.tt, targetRes.tt, speed);
+  displayRes.mt = lerpRes(displayRes.mt, targetRes.mt, speed);
+}
+
+// ===== LIVE RESEARCH TIMER =====
+function startResearchTimer() {
+  if (researchTimerInterval) return;
+  researchTimerInterval = setInterval(function() {
+    var techList = document.getElementById('techList');
+    if (!techList || !mySt) return;
+    var timers = techList.querySelectorAll('.item-timer');
+    for (var i = 0; i < timers.length; i++) {
+      var tmEl = timers[i];
+      var endTime = parseInt(tmEl.getAttribute('data-end'));
+      if (!endTime) continue;
+      var rem = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+      if (rem <= 0) { tmEl.textContent = '✅ 완료!'; tmEl.style.color = '#2ecc71'; }
+      else tmEl.textContent = '📖 연구중 ' + rem + '초';
+    }
+  }, 1000);
+}
+
+// ===== TERRITORY COUNT TRACKING =====
+function checkTerritoryChange() {
+  if (!mySt) return;
+  var cells = mySt.cells || 0;
+  if (prevTerritoryCount > 0 && cells !== prevTerritoryCount) {
+    var diff = cells - prevTerritoryCount;
+    if (diff < -5) {
+      triggerShake(Math.min(8, Math.abs(diff) * 0.5));
+      showToast('⚠️ 영토 ' + diff + '칸 상실!', 'error', 2500);
+    } else if (diff >= 20) {
+      showToast('🏴 영토 +' + diff + '칸 확보!', 'success', 2000);
+    }
+  }
+  prevTerritoryCount = cells;
+}
 
 // ===== EDGE SCROLLING =====
 function handleEdgeScroll() {
@@ -1274,6 +1400,12 @@ function renderChunkToBuf(c) {
 function draw() {
   var w = canvas.width, h = canvas.height;
 
+  // FPS tracking
+  updateFPS();
+
+  // Animated resource counters
+  updateAnimatedCounters();
+
   // Edge scrolling
   handleEdgeScroll();
 
@@ -1287,6 +1419,10 @@ function draw() {
   // Dark background
   ctx.fillStyle = '#08081a';
   ctx.fillRect(0, 0, w, h);
+
+  // Apply screen shake
+  ctx.save();
+  applyShake();
 
   var srcX = Math.max(0, camX);
   var srcY = Math.max(0, camY);
@@ -1842,6 +1978,25 @@ function draw() {
     coordHud.textContent = hx2 + ', ' + hy2 + ' | zoom ' + zoom.toFixed(1) + 'x' + tInfo;
   }
 
+  // Restore screen shake transformation
+  ctx.restore();
+
+  // FPS & Ping HUD overlay (drawn after shake restore so it's stable)
+  if (alive) {
+    var fpsColor = fpsCurrent >= 50 ? '#2ecc71' : fpsCurrent >= 30 ? '#f39c12' : '#e74c3c';
+    ctx.font = '10px "Orbitron", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = fpsColor;
+    ctx.globalAlpha = 0.6;
+    ctx.fillText('FPS: ' + fpsCurrent, 10, h - 10);
+    if (pingMs > 0) {
+      var pingColor = pingMs < 80 ? '#2ecc71' : pingMs < 200 ? '#f39c12' : '#e74c3c';
+      ctx.fillStyle = pingColor;
+      ctx.fillText('PING: ' + pingMs + 'ms', 80, h - 10);
+    }
+    ctx.globalAlpha = 1;
+  }
+
   drawMinimap();
   requestAnimationFrame(draw);
 }
@@ -2305,11 +2460,12 @@ function drawPlayerLabels(w, h) {
 function updateUI() {
   if (!mySt) return;
   var s = mySt;
-  document.getElementById('rTroop').textContent = '⚔️ ' + fmtNum(s.tt) + '/' + fmtNum(s.mt);
-  document.getElementById('rFood').textContent = '\uD83C\uDF3E ' + fmtNum(s.r.f);
-  document.getElementById('rWood').textContent = '\uD83E\uDEB5 ' + fmtNum(s.r.w);
-  document.getElementById('rStone').textContent = '\uD83E\uDEA8 ' + fmtNum(s.r.s);
-  document.getElementById('rGold').textContent = '\uD83D\uDCB0 ' + fmtNum(s.r.g);
+  // Use animated display values for smooth transitions
+  document.getElementById('rTroop').textContent = '⚔️ ' + fmtNum(Math.round(displayRes.tt)) + '/' + fmtNum(Math.round(displayRes.mt));
+  document.getElementById('rFood').textContent = '\uD83C\uDF3E ' + fmtNum(Math.round(displayRes.f));
+  document.getElementById('rWood').textContent = '\uD83E\uDEB5 ' + fmtNum(Math.round(displayRes.w));
+  document.getElementById('rStone').textContent = '\uD83E\uDEA8 ' + fmtNum(Math.round(displayRes.s));
+  document.getElementById('rGold').textContent = '\uD83D\uDCB0 ' + fmtNum(Math.round(displayRes.g));
 
   // Strategic bonuses panel
   var bonusEl = document.getElementById('strategicBonuses');
@@ -2367,6 +2523,7 @@ function updateUI() {
   renderQuests();
   updateTradeRate();
   updateUnitPanel();
+  checkTerritoryChange();
 }
 
 function updateCivBadge() {
@@ -2426,8 +2583,14 @@ function renderTech() {
     html += '<div class="item-header"><span class="item-name">'+def.n+'</span>';
     html += '<span class="item-level">Lv.'+t.l+'/'+def.max+'</span></div>';
     html += '<div class="item-desc">'+def.desc+'</div>';
-    if (researching) html += '<div class="item-timer">\uD83D\uDCD6 연구중 '+Math.ceil((t.e-now)/1000)+'초</div>';
+    if (researching) {
+      var remSec = Math.ceil((t.e-now)/1000);
+      var pct = Math.max(0, Math.min(100, 100 - (t.e - now) / ((t.e - (t.startTime || now)) || 1) * 100));
+      html += '<div class="item-timer" data-end="'+t.e+'">📖 연구중 '+remSec+'초</div>';
+      html += '<div class="tech-progress"><div class="tech-progress-fill" style="width:'+pct+'%"></div></div>';
+    }
     else if (!atMax) html += '<div class="item-cost">'+formatCost(costs,can)+'</div>';
+    else html += '<div class="item-maxed">✅ 최대 레벨</div>';
     html += '</div>';
   }
   el.innerHTML = html;
@@ -2462,14 +2625,21 @@ function renderQuests() {
 function renderLeaderboard() {
   var pEl = document.getElementById('plb');
   if (!pEl) return;
+  // Track rank changes
+  trackRankChanges(lb.p);
   var html = '<div style="font-size:0.85em;color:#888;margin-bottom:5px;font-weight:bold">\uD83D\uDC51 순위</div>';
   for (var i = 0; i < lb.p.length; i++) {
     var p = lb.p[i];
     var isMe = p.i === myPi;
-    html += '<div class="lb-item" style="'+(isMe?'background:rgba(52,152,219,0.15)':'')+';cursor:pointer"';
+    var rankChange = lbRankChanges[p.i] || 0;
+    var rankArrow = '';
+    if (rankChange > 0) rankArrow = '<span class="lb-change lb-up">▲' + rankChange + '</span>';
+    else if (rankChange < 0) rankArrow = '<span class="lb-change lb-down">▼' + Math.abs(rankChange) + '</span>';
+    html += '<div class="lb-item' + (isMe ? ' lb-me' : '') + '" style="cursor:pointer"';
     if (p.i !== myPi) html += ' onclick="spyOn('+p.i+')"';
     html += '>';
     html += '<span class="lb-rank">'+(i+1)+'</span>';
+    html += rankArrow;
     html += '<span class="lb-color" style="background:'+p.color+'"></span>';
     html += '<span class="lb-civ">'+(p.civIcon||'')+'</span>';
     html += '<span class="lb-name">'+(p.ct||'')+p.name+'</span>';
@@ -2514,12 +2684,27 @@ function showDeathStats() {
   var el = document.getElementById('deathStats');
   if (!el || !mySt) return;
   var s = mySt.stats || {};
-  el.innerHTML = '<div>점령칸: <b>'+(s.cellsClaimed||0)+'</b></div>'
-    +'<div>야만족처치: <b>'+(s.barbsKilled||0)+'</b></div>'
-    +'<div>적영토점령: <b>'+(s.enemyCellsTaken||0)+'</b></div>'
-    +'<div>건물건설: <b>'+(s.buildingsBuilt||0)+'</b></div>'
-    +'<div>퀘스트완료: <b>'+(s.questsDone||0)+'</b></div>'
-    +'<div>최고연속처치: <b>'+(mySt.bestStreak||0)+'</b></div>';
+  var totalScore = (s.cellsClaimed||0) + (s.barbsKilled||0)*5 + (s.enemyCellsTaken||0)*3 + (s.buildingsBuilt||0)*10 + (s.questsDone||0)*20;
+  el.innerHTML = '<div class="death-score">🏆 총 점수: <b>' + fmtNum(totalScore) + '</b></div>'
+    +'<div class="death-stat-row"><span class="death-stat-icon">🗺️</span><span>점령칸</span><b>'+(s.cellsClaimed||0)+'</b></div>'
+    +'<div class="death-stat-row"><span class="death-stat-icon">☠️</span><span>야만족처치</span><b>'+(s.barbsKilled||0)+'</b></div>'
+    +'<div class="death-stat-row"><span class="death-stat-icon">⚔️</span><span>적영토점령</span><b>'+(s.enemyCellsTaken||0)+'</b></div>'
+    +'<div class="death-stat-row"><span class="death-stat-icon">🏗️</span><span>건물건설</span><b>'+(s.buildingsBuilt||0)+'</b></div>'
+    +'<div class="death-stat-row"><span class="death-stat-icon">📜</span><span>퀘스트완료</span><b>'+(s.questsDone||0)+'</b></div>'
+    +'<div class="death-stat-row"><span class="death-stat-icon">🔥</span><span>최고연속처치</span><b>'+(mySt.bestStreak||0)+'</b></div>'
+    +'<div class="death-survival"><span>⏱️ 생존시간: <b>'+formatSurvivalTime(s.survivalTime||0)+'</b></span></div>';
+}
+
+function formatSurvivalTime(ms) {
+  var sec = Math.floor(ms / 1000);
+  var m = Math.floor(sec / 60);
+  var s = sec % 60;
+  if (m > 0) return m + '분 ' + s + '초';
+  return s + '초';
+}
+
+function respawnMidGame() {
+  socket.emit('respawnMidGame', { civ: myCiv });
 }
 
 // ===== COST HELPERS =====
@@ -2601,11 +2786,11 @@ function updateUnitPanel() {
 
 // ===== ACTIONS =====
 function buildItem(k) {
-  if (buildPlaceMode === k) { buildPlaceMode = null; removeModeIndicator(); }
-  else { buildPlaceMode = k; deployMode = null; massAtkMode = false; showModeIndicator('🏗️ ' + (BLDG[k] ? BLDG[k].n : k) + ' 배치 모드 (ESC 취소)', 'build'); }
+  if (buildPlaceMode === k) { buildPlaceMode = null; removeModeIndicator(); canvas.style.cursor = ''; }
+  else { buildPlaceMode = k; deployMode = null; massAtkMode = false; showModeIndicator('🏗️ ' + (BLDG[k] ? BLDG[k].n : k) + ' 배치 모드 (ESC 취소)', 'build'); canvas.style.cursor = 'crosshair'; }
   renderBuildings();
 }
-function cancelBuildPlace() { buildPlaceMode = null; removeModeIndicator(); renderBuildings(); }
+function cancelBuildPlace() { buildPlaceMode = null; removeModeIndicator(); canvas.style.cursor = ''; renderBuildings(); }
 function researchItem(k) { socket.emit('res', {t:k}); showToast('🔬 연구 시작', 'info', 1500); }
 function useSkill(sk) { /* skills removed */ }
 function doTrade() {
@@ -2615,7 +2800,7 @@ function doTrade() {
   socket.emit('trade', {from:from, to:to, amount:amt});
 }
 function doBorderPush() { socket.emit('bpush'); showToast('🏴 영토 확장 명령!', 'info', 1500); }
-function startMassAtk() { massAtkMode = true; deployMode = null; buildPlaceMode = null; removeModeIndicator(); showModeIndicator('⚔️ 대규모 공격 — 목표 클릭 (ESC 취소)', 'attack'); }
+function startMassAtk() { massAtkMode = true; deployMode = null; buildPlaceMode = null; removeModeIndicator(); showModeIndicator('⚔️ 대규모 공격 — 목표 클릭 (ESC 취소)', 'attack'); canvas.style.cursor = 'crosshair'; }
 function deployUnit(type) {
   if (!alive) return;
   deployMode = type;
@@ -2624,6 +2809,7 @@ function deployUnit(type) {
   removeModeIndicator();
   var ut = UNIT_TYPES[type] || {};
   showModeIndicator((ut.icon || '🎖️') + ' ' + (ut.n || type) + ' 배치 — 목표 클릭 (ESC 취소)', 'deploy');
+  canvas.style.cursor = 'crosshair';
 }
 function cancelUnit(uid) {
   socket.emit('cancelUnit', { id: uid });
@@ -2752,11 +2938,13 @@ canvas.addEventListener('mousedown', function(e) {
     socket.emit('deployUnit', {type: deployMode, tx: tx, ty: ty});
     deployMode = null;
     removeModeIndicator();
+    canvas.style.cursor = '';
     return;
   }
   if (massAtkMode) {
     massAtkMode = false;
     removeModeIndicator();
+    canvas.style.cursor = '';
     socket.emit('matk', {tx:tx, ty:ty});
     return;
   }
@@ -2803,10 +2991,19 @@ canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 document.addEventListener('keydown', function(e) {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   keys[e.key] = true;
-  if (e.key === 'Escape') { massAtkMode = false; deployMode = null; buildPlaceMode = null; renderBuildings(); closeSpyModal(); removeModeIndicator(); }
+  if (e.key === 'Escape') { massAtkMode = false; deployMode = null; buildPlaceMode = null; renderBuildings(); closeSpyModal(); removeModeIndicator(); canvas.style.cursor = ''; }
   if (e.key === '5') deployUnit('scout');
   if (e.key === '6') deployUnit('army');
   if (e.key === '7') deployUnit('elite');
+  // Tab shortcuts: 1-6 switch side panel tabs (only when not in number unit deploy)
+  var tabKeys = { '!': 'lbTab', '@': 'bldTab', '#': 'techTab', '$': 'questTab', '%': 'tradeTab', '^': 'clanTab' };
+  if (e.shiftKey && tabKeys[e.key]) { switchTab(tabKeys[e.key]); if (sidePanelCollapsed) toggleSidePanel(); }
+  if (!e.shiftKey && e.key === '1') { switchTab('lbTab'); if (sidePanelCollapsed) toggleSidePanel(); }
+  if (!e.shiftKey && e.key === '2') { switchTab('bldTab'); if (sidePanelCollapsed) toggleSidePanel(); }
+  if (!e.shiftKey && e.key === '3') { switchTab('techTab'); if (sidePanelCollapsed) toggleSidePanel(); }
+  if (!e.shiftKey && e.key === '4') { switchTab('questTab'); if (sidePanelCollapsed) toggleSidePanel(); }
+  if (e.key === '8') { switchTab('tradeTab'); if (sidePanelCollapsed) toggleSidePanel(); }
+  if (e.key === '9') { switchTab('clanTab'); if (sidePanelCollapsed) toggleSidePanel(); }
   if (e.key === 'Home' || e.key === 'h') { centerOnCapital(); }
   if (e.key === 'w' || e.key === 'ArrowUp') { targetCamY -= 5; throttledVP(); }
   if (e.key === 'a' || e.key === 'ArrowLeft') { targetCamX -= 5; throttledVP(); }
@@ -2857,11 +3054,13 @@ canvas.addEventListener('touchstart', function(e) {
     socket.emit('deployUnit', {type: deployMode, tx: tx, ty: ty});
     deployMode = null;
     removeModeIndicator();
+    canvas.style.cursor = '';
     return;
   }
   if (massAtkMode) {
     massAtkMode = false;
     removeModeIndicator();
+    canvas.style.cursor = '';
     socket.emit('matk', {tx:tx, ty:ty});
     return;
   }
@@ -2922,6 +3121,8 @@ canvas.addEventListener('touchend', function(e) {
 resize();
 requestAnimationFrame(draw);
 setInterval(function() { if (alive && mySt) { updateResourceRates(); } }, 5000);
+startPingMeasurement();
+startResearchTimer();
 
 // Minimap click-to-navigate
 mmCanvas.addEventListener('click', function(e) {
