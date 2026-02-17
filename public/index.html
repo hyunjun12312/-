@@ -71,6 +71,12 @@
 
   <!-- Game UI -->
   <div id="gu" style="display:none">
+    <!-- Connection Status -->
+    <div id="connStatus" class="conn-status connected">
+      <span class="conn-dot"></span>
+      <span class="conn-text">연결됨</span>
+    </div>
+
     <!-- Round Timer -->
     <div id="roundTimer" class="round-timer"></div>
 
@@ -78,11 +84,25 @@
     <div id="topBar">
       <span id="rankBadge" class="rank-badge"></span>
       <span id="civBadge" class="civ-badge"></span>
-      <span id="rTroop" class="troop-highlight">⚔️ 0/0</span>
-      <span id="rFood">🌾 0</span>
-      <span id="rWood">🪵 0</span>
-      <span id="rStone">🪨 0</span>
-      <span id="rGold">💰 0</span>
+      <div class="res-group troop-res">
+        <span id="rTroop" class="troop-highlight">⚔️ 0/0</span>
+      </div>
+      <div class="res-group" data-res="food">
+        <span id="rFood">🌾 0</span>
+        <span id="rFoodRate" class="res-rate"></span>
+      </div>
+      <div class="res-group" data-res="wood">
+        <span id="rWood">🪵 0</span>
+        <span id="rWoodRate" class="res-rate"></span>
+      </div>
+      <div class="res-group" data-res="stone">
+        <span id="rStone">🪨 0</span>
+        <span id="rStoneRate" class="res-rate"></span>
+      </div>
+      <div class="res-group" data-res="gold">
+        <span id="rGold">💰 0</span>
+        <span id="rGoldRate" class="res-rate"></span>
+      </div>
     </div>
 
     <!-- Shield / Streak / Protection indicators -->
@@ -93,71 +113,74 @@
 
     <!-- Side Panel -->
     <div id="sidePanel">
+      <button id="sidePanelToggle" class="side-panel-toggle" onclick="toggleSidePanel()">◀</button>
       <div class="tab-bar">
-        <button class="tab-btn active" data-tab="lbTab" onclick="switchTab('lbTab')">순위</button>
-        <button class="tab-btn" data-tab="bldTab" onclick="switchTab('bldTab')">건물</button>
-        <button class="tab-btn" data-tab="techTab" onclick="switchTab('techTab')">기술</button>
-        <button class="tab-btn" data-tab="questTab" onclick="switchTab('questTab')">퀘스트</button>
-        <button class="tab-btn" data-tab="tradeTab" onclick="switchTab('tradeTab')">교역</button>
-        <button class="tab-btn" data-tab="clanTab" onclick="switchTab('clanTab')">클랜</button>
+        <button class="tab-btn active" data-tab="lbTab" onclick="switchTab('lbTab')" title="순위">👑<span class="tab-label">순위</span></button>
+        <button class="tab-btn" data-tab="bldTab" onclick="switchTab('bldTab')" title="건물">🏗️<span class="tab-label">건물</span></button>
+        <button class="tab-btn" data-tab="techTab" onclick="switchTab('techTab')" title="기술">🔬<span class="tab-label">기술</span></button>
+        <button class="tab-btn" data-tab="questTab" onclick="switchTab('questTab')" title="퀘스트">📜<span class="tab-label">퀘스트</span></button>
+        <button class="tab-btn" data-tab="tradeTab" onclick="switchTab('tradeTab')" title="교역">🤝<span class="tab-label">교역</span></button>
+        <button class="tab-btn" data-tab="clanTab" onclick="switchTab('clanTab')" title="클랜">🏴<span class="tab-label">클랜</span></button>
       </div>
 
-      <!-- Leaderboard Tab -->
-      <div id="lbTab" class="tab-content active">
-        <div id="plb"></div>
-        <div id="clb"></div>
-      </div>
-
-      <!-- Buildings Tab -->
-      <div id="bldTab" class="tab-content">
-        <div id="bldList"></div>
-      </div>
-
-      <!-- Tech Tab -->
-      <div id="techTab" class="tab-content">
-        <div id="techList"></div>
-      </div>
-
-      <!-- Quest Tab -->
-      <div id="questTab" class="tab-content">
-        <div id="questStreak" class="quest-streak"></div>
-        <div id="questList"></div>
-      </div>
-
-      <!-- Trade Tab -->
-      <div id="tradeTab" class="tab-content">
-        <div class="trade-panel">
-          <h3>자원 교환</h3>
-          <div class="trade-row">
-            <select id="tradeFrom">
-              <option value="food">식량</option>
-              <option value="wood">목재</option>
-              <option value="stone">석재</option>
-              <option value="gold">골드</option>
-            </select>
-            <span>→</span>
-            <select id="tradeTo">
-              <option value="wood">목재</option>
-              <option value="food">식량</option>
-              <option value="stone">석재</option>
-              <option value="gold">골드</option>
-            </select>
-          </div>
-          <input id="tradeAmount" type="number" value="100" min="10" max="10000" placeholder="수량">
-          <div id="tradeRate" class="trade-rate"></div>
-          <button onclick="doTrade()" class="btn">교환</button>
+      <div class="tab-content-wrapper">
+        <!-- Leaderboard Tab -->
+        <div id="lbTab" class="tab-content active">
+          <div id="plb"></div>
+          <div id="clb"></div>
         </div>
-      </div>
 
-      <!-- Clan Tab -->
-      <div id="clanTab" class="tab-content">
-        <div id="clanPanel"></div>
+        <!-- Buildings Tab -->
+        <div id="bldTab" class="tab-content">
+          <div id="bldList"></div>
+        </div>
+
+        <!-- Tech Tab -->
+        <div id="techTab" class="tab-content">
+          <div id="techList"></div>
+        </div>
+
+        <!-- Quest Tab -->
+        <div id="questTab" class="tab-content">
+          <div id="questStreak" class="quest-streak"></div>
+          <div id="questList"></div>
+        </div>
+
+        <!-- Trade Tab -->
+        <div id="tradeTab" class="tab-content">
+          <div class="trade-panel">
+            <h3>자원 교환</h3>
+            <div class="trade-row">
+              <select id="tradeFrom">
+                <option value="food">식량</option>
+                <option value="wood">목재</option>
+                <option value="stone">석재</option>
+                <option value="gold">골드</option>
+              </select>
+              <span>→</span>
+              <select id="tradeTo">
+                <option value="wood">목재</option>
+                <option value="food">식량</option>
+                <option value="stone">석재</option>
+                <option value="gold">골드</option>
+              </select>
+            </div>
+            <input id="tradeAmount" type="number" value="100" min="10" max="10000" placeholder="수량">
+            <div id="tradeRate" class="trade-rate"></div>
+            <button onclick="doTrade()" class="btn">교환</button>
+          </div>
+        </div>
+
+        <!-- Clan Tab -->
+        <div id="clanTab" class="tab-content">
+          <div id="clanPanel"></div>
+        </div>
       </div>
 
       <!-- Action Buttons -->
       <div class="action-buttons">
-        <button onclick="doBorderPush()" class="btn btn-blue">🏴 영토 확장</button>
-        <button onclick="startMassAtk()" class="btn btn-red">⚔️ 대규모 공격</button>
+        <button onclick="doBorderPush()" class="btn btn-blue" title="B키">🏴 영토 확장<span class="hotkey-badge">B</span></button>
+        <button onclick="startMassAtk()" class="btn btn-red" title="M키">⚔️ 대규모 공격<span class="hotkey-badge">M</span></button>
       </div>
 
       <!-- Unit Deployment -->
@@ -190,9 +213,26 @@
       </div>
     </div>
 
-    <!-- Minimap -->
-    <canvas id="minimap" width="300" height="150"></canvas>
+    <!-- Quick Action Bar -->
+    <div id="quickBar" class="quick-bar">
+      <button onclick="centerOnCapital()" class="qbar-btn" title="수도로 이동 (H)">🏰<span class="qbar-key">H</span></button>
+      <button onclick="toggleMinimap()" class="qbar-btn" title="미니맵 토글 (Tab)">🗺️</button>
+      <button id="qbarZoomIn" class="qbar-btn" title="확대 (+)">🔍+</button>
+      <button id="qbarZoomOut" class="qbar-btn" title="축소 (-)">🔍-</button>
+    </div>
+
+    <!-- Minimap Container -->
+    <div id="minimapContainer" class="minimap-container">
+      <canvas id="minimap" width="300" height="150"></canvas>
+      <div class="minimap-header">
+        <span class="minimap-title">미니맵</span>
+        <button class="minimap-close" onclick="toggleMinimap()">✕</button>
+      </div>
+    </div>
     <div id="coordHud"></div>
+
+    <!-- Toast Container -->
+    <div id="toastContainer" class="toast-container"></div>
 
     <!-- Notifications -->
     <div id="msgBox" class="msg-box" style="display:none"></div>
@@ -200,6 +240,25 @@
     <div id="comboNotif" class="combo-notif" style="display:none"></div>
     <div id="streakNotif" class="streak-notif" style="display:none"></div>
     <div id="questDoneNotif" class="quest-done-notif" style="display:none"></div>
+
+    <!-- Keyboard Shortcuts Help -->
+    <div id="shortcutHelp" class="shortcut-help" style="display:none">
+      <div class="shortcut-title">⌨️ 단축키</div>
+      <div class="shortcut-grid">
+        <div class="sc-item"><kbd>W/↑</kbd> 위</div>
+        <div class="sc-item"><kbd>A/←</kbd> 왼쪽</div>
+        <div class="sc-item"><kbd>S/↓</kbd> 아래</div>
+        <div class="sc-item"><kbd>D/→</kbd> 오른쪽</div>
+        <div class="sc-item"><kbd>H</kbd> 수도 이동</div>
+        <div class="sc-item"><kbd>B</kbd> 영토 확장</div>
+        <div class="sc-item"><kbd>M</kbd> 대규모 공격</div>
+        <div class="sc-item"><kbd>5</kbd> 정찰대</div>
+        <div class="sc-item"><kbd>6</kbd> 원정군</div>
+        <div class="sc-item"><kbd>7</kbd> 정예군</div>
+        <div class="sc-item"><kbd>P</kbd> 패널 토글</div>
+        <div class="sc-item"><kbd>ESC</kbd> 취소</div>
+      </div>
+    </div>
   </div>
 
   <!-- Spy Modal -->

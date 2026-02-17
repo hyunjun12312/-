@@ -254,6 +254,32 @@ var targetCamX = 0, targetCamY = 0;
 var camLerp = 0.6;
 var smoothCam = true;
 
+// Edge scrolling
+var edgeScrollSpeed = 8;
+var edgeScrollMargin = 30;
+var edgeScrollEnabled = true;
+
+// Resource tracking for income rates
+var prevResources = null;
+var resRateUpdateTimer = 0;
+var resRates = { f: 0, w: 0, s: 0, g: 0 };
+
+// Side panel state
+var sidePanelCollapsed = false;
+
+// Minimap visibility
+var minimapVisible = true;
+
+// Mode indicator
+var currentModeEl = null;
+
+// Zoom indicator
+var zoomShowTimer = 0;
+
+// Toast queue
+var toastQueue = [];
+var MAX_TOASTS = 5;
+
 // ===== PARTICLE SYSTEM =====
 var particles = [];
 var MAX_PARTICLES = 100;
@@ -297,6 +323,158 @@ function updateAndDrawParticles() {
 
 function isWaterTerrain(tt) { return tt === 0 || tt === 6 || tt === 7; }
 function isLandTerrain(tt) { return tt >= 1 && tt <= 5 || tt === 8 || tt === 9; }
+
+// ===== TOAST NOTIFICATION SYSTEM =====
+function showToast(msg, type, duration) {
+  type = type || 'info';
+  duration = duration || 3000;
+  var container = document.getElementById('toastContainer');
+  if (!container) return;
+  var toast = document.createElement('div');
+  toast.className = 'toast toast-' + type;
+  toast.textContent = msg;
+  container.appendChild(toast);
+  toastQueue.push(toast);
+  if (toastQueue.length > MAX_TOASTS) {
+    var old = toastQueue.shift();
+    if (old.parentNode) old.parentNode.removeChild(old);
+  }
+  setTimeout(function() {
+    toast.classList.add('toast-out');
+    setTimeout(function() {
+      if (toast.parentNode) toast.parentNode.removeChild(toast);
+      var idx = toastQueue.indexOf(toast);
+      if (idx >= 0) toastQueue.splice(idx, 1);
+    }, 300);
+  }, duration);
+}
+
+// ===== SIDE PANEL TOGGLE =====
+function toggleSidePanel() {
+  var panel = document.getElementById('sidePanel');
+  var toggle = document.getElementById('sidePanelToggle');
+  sidePanelCollapsed = !sidePanelCollapsed;
+  if (sidePanelCollapsed) {
+    panel.classList.add('collapsed');
+    document.body.classList.add('panel-collapsed');
+    toggle.textContent = '▶';
+  } else {
+    panel.classList.remove('collapsed');
+    document.body.classList.remove('panel-collapsed');
+    toggle.textContent = '◀';
+  }
+  // Adjust minimap and coord hud position
+  var mc = document.getElementById('minimapContainer');
+  var ch = document.getElementById('coordHud');
+  var cs = document.getElementById('connStatus');
+  if (mc) mc.style.right = sidePanelCollapsed ? '14px' : '320px';
+  if (ch) ch.style.right = sidePanelCollapsed ? '14px' : '320px';
+  if (cs) cs.style.right = sidePanelCollapsed ? '14px' : '316px';
+}
+
+// ===== MINIMAP TOGGLE =====
+function toggleMinimap() {
+  minimapVisible = !minimapVisible;
+  var mc = document.getElementById('minimapContainer');
+  if (mc) {
+    if (minimapVisible) mc.classList.remove('hidden');
+    else mc.classList.add('hidden');
+  }
+}
+
+// ===== CENTER ON CAPITAL =====
+function centerOnCapital() {
+  if (mySt && mySt.cap) {
+    targetCamX = mySt.cap.x - Math.floor(canvas.width / zoom / 2);
+    targetCamY = mySt.cap.y - Math.floor(canvas.height / zoom / 2);
+    throttledVP();
+    showToast('🏰 수도로 이동', 'info', 1500);
+  }
+}
+
+// ===== MODE INDICATOR =====
+function showModeIndicator(text, type) {
+  removeModeIndicator();
+  var el = document.createElement('div');
+  el.className = 'mode-indicator mode-' + type;
+  el.textContent = text;
+  document.body.appendChild(el);
+  currentModeEl = el;
+}
+function removeModeIndicator() {
+  if (currentModeEl && currentModeEl.parentNode) {
+    currentModeEl.parentNode.removeChild(currentModeEl);
+  }
+  currentModeEl = null;
+}
+
+// ===== RESOURCE RATE TRACKING =====
+function updateResourceRates() {
+  if (!mySt || !mySt.r) return;
+  var now = Date.now();
+  if (prevResources && now - resRateUpdateTimer < 5000) return;
+  if (prevResources) {
+    resRates.f = mySt.r.f - prevResources.f;
+    resRates.w = mySt.r.w - prevResources.w;
+    resRates.s = mySt.r.s - prevResources.s;
+    resRates.g = mySt.r.g - prevResources.g;
+    // Update rate display
+    updateResRateDisplay('rFoodRate', resRates.f);
+    updateResRateDisplay('rWoodRate', resRates.w);
+    updateResRateDisplay('rStoneRate', resRates.s);
+    updateResRateDisplay('rGoldRate', resRates.g);
+    // Flash animation on resource change
+    flashResGroup('food', resRates.f);
+    flashResGroup('wood', resRates.w);
+    flashResGroup('stone', resRates.s);
+    flashResGroup('gold', resRates.g);
+  }
+  prevResources = { f: mySt.r.f, w: mySt.r.w, s: mySt.r.s, g: mySt.r.g };
+  resRateUpdateTimer = now;
+}
+function updateResRateDisplay(elId, rate) {
+  var el = document.getElementById(elId);
+  if (!el) return;
+  if (rate > 0) { el.textContent = '+' + fmtNum(rate); el.className = 'res-rate positive'; }
+  else if (rate < 0) { el.textContent = fmtNum(rate); el.className = 'res-rate negative'; }
+  else { el.textContent = ''; el.className = 'res-rate'; }
+}
+function flashResGroup(resName, rate) {
+  var el = document.querySelector('.res-group[data-res="' + resName + '"]');
+  if (!el || rate === 0) return;
+  el.classList.remove('res-up', 'res-down');
+  void el.offsetWidth; // force reflow
+  el.classList.add(rate > 0 ? 'res-up' : 'res-down');
+}
+
+// ===== CONNECTION STATUS =====
+function updateConnStatus(status) {
+  var el = document.getElementById('connStatus');
+  if (!el) return;
+  var textEl = el.querySelector('.conn-text');
+  el.className = 'conn-status ' + status;
+  if (textEl) {
+    if (status === 'connected') textEl.textContent = '연결됨';
+    else if (status === 'disconnected') textEl.textContent = '연결 끊김';
+    else if (status === 'reconnecting') textEl.textContent = '재연결 중...';
+  }
+}
+socket.on('connect', function() { updateConnStatus('connected'); });
+socket.on('disconnect', function() { updateConnStatus('disconnected'); showToast('⚠️ 서버 연결이 끊겼습니다', 'error', 5000); });
+socket.on('reconnecting', function() { updateConnStatus('reconnecting'); });
+socket.on('reconnect', function() { updateConnStatus('connected'); showToast('✅ 서버에 재연결됨', 'success', 2000); });
+
+// ===== EDGE SCROLLING =====
+function handleEdgeScroll() {
+  if (!alive || !edgeScrollEnabled || dragging || mouseDown) return;
+  var moved = false;
+  var speed = edgeScrollSpeed / zoom;
+  if (mouseX < edgeScrollMargin) { targetCamX -= speed * ((edgeScrollMargin - mouseX) / edgeScrollMargin); moved = true; }
+  if (mouseX > canvas.width - edgeScrollMargin) { targetCamX += speed * ((mouseX - (canvas.width - edgeScrollMargin)) / edgeScrollMargin); moved = true; }
+  if (mouseY < edgeScrollMargin) { targetCamY -= speed * ((edgeScrollMargin - mouseY) / edgeScrollMargin); moved = true; }
+  if (mouseY > canvas.height - edgeScrollMargin) { targetCamY += speed * ((mouseY - (canvas.height - edgeScrollMargin)) / edgeScrollMargin); moved = true; }
+  if (moved) throttledVP();
+}
 var BARB_COLOR = [80, 0, 0];
 var UNKNOWN_TERRITORY_COLOR = [90, 70, 100]; // purple-grey for unknown owner territory
 var SPECIAL_COLORS = {
@@ -599,6 +777,8 @@ socket.on('qs', function(d) {
   if (d.bCount !== undefined) mySt.bCount = d.bCount;
   if (d.bMax !== undefined) mySt.bMax = d.bMax;
   if (d.pLv !== undefined) mySt.pLv = d.pLv;
+  // Track resource rate changes
+  updateResourceRates();
   // Immediate UI refresh for resource bar only
   document.getElementById('rTroop').textContent = '\u2694\uFE0F ' + fmtNum(d.tt) + '/' + fmtNum(d.mt);
   document.getElementById('rFood').textContent = '\uD83C\uDF3E ' + fmtNum(d.r.f);
@@ -624,11 +804,13 @@ socket.on('cl_left', function() { if (mySt) updateUI(); });
 socket.on('msg', function(m) {
   lastMsg = m; msgTimer = Date.now() + 3000;
   showMsgBox(m);
+  showToast(m, 'warning', 3000);
 });
 
 socket.on('reward', function(r) {
   lastReward = r; rewardTimer = Date.now() + 3000;
   showRewardBox('보상! F+' + r.food + ' W+' + r.wood + ' S+' + r.stone + ' G+' + r.gold);
+  showToast('🎁 보상 획득!', 'success', 2000);
 });
 
 socket.on('died', function() {
@@ -1092,6 +1274,9 @@ function renderChunkToBuf(c) {
 
 function draw() {
   var w = canvas.width, h = canvas.height;
+
+  // Edge scrolling
+  handleEdgeScroll();
 
   // Smooth camera lerp — snap quickly
   if (smoothCam && !dragging) {
@@ -1934,13 +2119,43 @@ function drawUnits(w, h) {
 }
 
 function drawMinimap() {
+  if (!minimapVisible) return;
   var mmW = mmCanvas.width, mmH = mmCanvas.height;
   mmCtx.fillStyle = '#0a0a14';
   mmCtx.fillRect(0, 0, mmW, mmH);
   mmCtx.drawImage(buf, 0, 0, mapW, mapH, 0, 0, mmW, mmH);
   var sx = mmW/mapW, sy = mmH/mapH;
+  // Viewport rectangle
   mmCtx.strokeStyle = 'rgba(255,255,255,0.85)'; mmCtx.lineWidth = 1.5;
   mmCtx.strokeRect(camX*sx, camY*sy, (vpW/zoom)*sx, (vpH/zoom)*sy);
+  // Draw unit positions on minimap
+  if (activeUnits && activeUnits.length > 0) {
+    for (var ui = 0; ui < activeUnits.length; ui++) {
+      var u = activeUnits[ui];
+      var umx = u.x * sx, umy = u.y * sy;
+      mmCtx.fillStyle = u.mine ? '#3498db' : (u.ally ? '#2ecc71' : '#e74c3c');
+      mmCtx.fillRect(umx - 1.5, umy - 1.5, 3, 3);
+    }
+  }
+  // Draw capital on minimap
+  if (mySt && mySt.cap) {
+    var capMx = mySt.cap.x * sx, capMy = mySt.cap.y * sy;
+    mmCtx.fillStyle = '#ffd700';
+    mmCtx.beginPath();
+    mmCtx.arc(capMx, capMy, 3, 0, Math.PI * 2);
+    mmCtx.fill();
+  }
+  // Storm circle on minimap
+  if (roundInfo.stormR && roundInfo.stormR < 9000) {
+    var scx = (roundInfo.stormCX || 400) * sx;
+    var scy = (roundInfo.stormCY || 200) * sy;
+    var sr = roundInfo.stormR * sx;
+    mmCtx.strokeStyle = 'rgba(255,60,60,0.5)';
+    mmCtx.lineWidth = 1;
+    mmCtx.beginPath();
+    mmCtx.arc(scx, scy, sr, 0, Math.PI * 2);
+    mmCtx.stroke();
+  }
 }
 
 // ===== STORM OVERLAY =====
@@ -2387,12 +2602,12 @@ function updateUnitPanel() {
 
 // ===== ACTIONS =====
 function buildItem(k) {
-  if (buildPlaceMode === k) { buildPlaceMode = null; } // toggle off
-  else { buildPlaceMode = k; deployMode = null; massAtkMode = false; }
+  if (buildPlaceMode === k) { buildPlaceMode = null; removeModeIndicator(); }
+  else { buildPlaceMode = k; deployMode = null; massAtkMode = false; showModeIndicator('🏗️ ' + (BLDG[k] ? BLDG[k].n : k) + ' 배치 모드 (ESC 취소)', 'build'); }
   renderBuildings();
 }
-function cancelBuildPlace() { buildPlaceMode = null; renderBuildings(); }
-function researchItem(k) { socket.emit('res', {t:k}); }
+function cancelBuildPlace() { buildPlaceMode = null; removeModeIndicator(); renderBuildings(); }
+function researchItem(k) { socket.emit('res', {t:k}); showToast('🔬 연구 시작', 'info', 1500); }
 function useSkill(sk) { /* skills removed */ }
 function doTrade() {
   var from = document.getElementById('tradeFrom').value;
@@ -2400,12 +2615,16 @@ function doTrade() {
   var amt = parseInt(document.getElementById('tradeAmount').value) || 100;
   socket.emit('trade', {from:from, to:to, amount:amt});
 }
-function doBorderPush() { socket.emit('bpush'); }
-function startMassAtk() { massAtkMode = true; }
+function doBorderPush() { socket.emit('bpush'); showToast('🏴 영토 확장 명령!', 'info', 1500); }
+function startMassAtk() { massAtkMode = true; deployMode = null; buildPlaceMode = null; removeModeIndicator(); showModeIndicator('⚔️ 대규모 공격 — 목표 클릭 (ESC 취소)', 'attack'); }
 function deployUnit(type) {
   if (!alive) return;
   deployMode = type;
   massAtkMode = false;
+  buildPlaceMode = null;
+  removeModeIndicator();
+  var ut = UNIT_TYPES[type] || {};
+  showModeIndicator((ut.icon || '🎖️') + ' ' + (ut.n || type) + ' 배치 — 목표 클릭 (ESC 취소)', 'deploy');
 }
 function cancelUnit(uid) {
   socket.emit('cancelUnit', { id: uid });
@@ -2546,10 +2765,12 @@ canvas.addEventListener('mousedown', function(e) {
   if (deployMode) {
     socket.emit('deployUnit', {type: deployMode, tx: tx, ty: ty});
     deployMode = null;
+    removeModeIndicator();
     return;
   }
   if (massAtkMode) {
     massAtkMode = false;
+    removeModeIndicator();
     socket.emit('matk', {tx:tx, ty:ty});
     return;
   }
@@ -2587,6 +2808,8 @@ canvas.addEventListener('wheel', function(e) {
   targetCamY = my - mouseY/zoom;
   camX = targetCamX; camY = targetCamY;
   throttledVP();
+  // Show zoom indicator briefly
+  zoomShowTimer = Date.now() + 1500;
 }, { passive: false });
 
 canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
@@ -2594,17 +2817,23 @@ canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 document.addEventListener('keydown', function(e) {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   keys[e.key] = true;
-  if (e.key === 'Escape') { massAtkMode = false; deployMode = null; buildPlaceMode = null; renderBuildings(); closeSpyModal(); }
+  if (e.key === 'Escape') { massAtkMode = false; deployMode = null; buildPlaceMode = null; renderBuildings(); closeSpyModal(); removeModeIndicator(); }
   if (e.key === '5') deployUnit('scout');
   if (e.key === '6') deployUnit('army');
   if (e.key === '7') deployUnit('elite');
-  if (e.key === 'Home' || e.key === 'h') { // Center on capital
-    if (mySt && mySt.cap) { targetCamX = mySt.cap.x - Math.floor(canvas.width / zoom / 2); targetCamY = mySt.cap.y - Math.floor(canvas.height / zoom / 2); throttledVP(); }
-  }
+  if (e.key === 'Home' || e.key === 'h') { centerOnCapital(); }
   if (e.key === 'w' || e.key === 'ArrowUp') { targetCamY -= 5; throttledVP(); }
   if (e.key === 'a' || e.key === 'ArrowLeft') { targetCamX -= 5; throttledVP(); }
   if (e.key === 'd' || e.key === 'ArrowRight') { targetCamX += 5; throttledVP(); }
   if (e.key === 's' || e.key === 'ArrowDown') { targetCamY += 5; throttledVP(); }
+  if (e.key === 'b' || e.key === 'B') { doBorderPush(); }
+  if (e.key === 'm' || e.key === 'M') { startMassAtk(); }
+  if (e.key === 'p' || e.key === 'P') { toggleSidePanel(); }
+  if (e.key === 'Tab') { e.preventDefault(); toggleMinimap(); }
+  if (e.key === '?' || e.key === '/') {
+    var help = document.getElementById('shortcutHelp');
+    if (help) help.style.display = help.style.display === 'none' ? '' : 'none';
+  }
 });
 
 document.addEventListener('keyup', function(e) { keys[e.key] = false; });
@@ -2615,21 +2844,39 @@ if (tradeFrom) tradeFrom.addEventListener('change', updateTradeRate);
 if (tradeTo) tradeTo.addEventListener('change', updateTradeRate);
 
 // Touch support
+var lastTouchDist = 0;
+var touchStartTime = 0;
+var isTouchPanning = false;
 canvas.addEventListener('touchstart', function(e) {
   e.preventDefault();
+  if (e.touches.length === 2) {
+    // Pinch zoom start
+    var dx = e.touches[0].clientX - e.touches[1].clientX;
+    var dy = e.touches[0].clientY - e.touches[1].clientY;
+    lastTouchDist = Math.sqrt(dx*dx + dy*dy);
+    return;
+  }
   var t = e.touches[0];
   mouseX = t.clientX; mouseY = t.clientY; mouseDown = true;
+  touchStartTime = Date.now();
+  isTouchPanning = false;
   var tx = Math.floor(t.clientX/zoom+camX);
   var ty = Math.floor(t.clientY/zoom+camY);
   if (buildPlaceMode) {
     socket.emit('bld', {b: buildPlaceMode, x: tx, y: ty});
-    buildPlaceMode = null;
-    renderBuildings();
+    // Keep build mode active like mouse
     return;
   }
   if (deployMode) {
     socket.emit('deployUnit', {type: deployMode, tx: tx, ty: ty});
     deployMode = null;
+    removeModeIndicator();
+    return;
+  }
+  if (massAtkMode) {
+    massAtkMode = false;
+    removeModeIndicator();
+    socket.emit('matk', {tx:tx, ty:ty});
     return;
   }
   if (alive) emitExp(tx, ty);
@@ -2637,19 +2884,84 @@ canvas.addEventListener('touchstart', function(e) {
 
 canvas.addEventListener('touchmove', function(e) {
   e.preventDefault();
+  if (e.touches.length === 2) {
+    // Pinch zoom
+    var dx = e.touches[0].clientX - e.touches[1].clientX;
+    var dy = e.touches[0].clientY - e.touches[1].clientY;
+    var dist = Math.sqrt(dx*dx + dy*dy);
+    if (lastTouchDist > 0) {
+      var scale = dist / lastTouchDist;
+      var cx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      var cy = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+      var mx = cx / zoom + camX;
+      var my = cy / zoom + camY;
+      zoom = Math.max(1, Math.min(32, zoom * scale));
+      zoom = Math.round(zoom * 100) / 100;
+      targetCamX = mx - cx / zoom;
+      targetCamY = my - cy / zoom;
+      camX = targetCamX; camY = targetCamY;
+      throttledVP();
+    }
+    lastTouchDist = dist;
+    return;
+  }
   var t = e.touches[0];
-  if (e.touches.length === 1 && mouseDown && alive) {
-    mouseX = t.clientX; mouseY = t.clientY;
-    emitExp(Math.floor(t.clientX/zoom+camX), Math.floor(t.clientY/zoom+camY));
+  if (e.touches.length === 1) {
+    // Check if panning (moved significantly from start)
+    var tdx = t.clientX - mouseX;
+    var tdy = t.clientY - mouseY;
+    if (Math.abs(tdx) > 5 || Math.abs(tdy) > 5 || isTouchPanning) {
+      isTouchPanning = true;
+      targetCamX -= tdx / zoom;
+      targetCamY -= tdy / zoom;
+      camX = targetCamX; camY = targetCamY;
+      mouseX = t.clientX; mouseY = t.clientY;
+      throttledVP();
+      return;
+    }
+    if (mouseDown && alive && !isTouchPanning) {
+      mouseX = t.clientX; mouseY = t.clientY;
+      emitExp(Math.floor(t.clientX/zoom+camX), Math.floor(t.clientY/zoom+camY));
+    }
   }
 }, { passive: false });
 
-canvas.addEventListener('touchend', function() { mouseDown = false; });
+canvas.addEventListener('touchend', function(e) {
+  mouseDown = false;
+  lastTouchDist = 0;
+  isTouchPanning = false;
+});
 
 // ===== BOOT =====
 resize();
 requestAnimationFrame(draw);
-setInterval(function() { if (alive && mySt) { /* periodic update */ } }, 500);
+setInterval(function() { if (alive && mySt) { updateResourceRates(); } }, 5000);
+
+// Minimap click-to-navigate
+mmCanvas.addEventListener('click', function(e) {
+  var rect = mmCanvas.getBoundingClientRect();
+  var mx = e.clientX - rect.left;
+  var my = e.clientY - rect.top;
+  var mapClickX = mx / mmCanvas.width * mapW;
+  var mapClickY = my / mmCanvas.height * mapH;
+  targetCamX = mapClickX - Math.floor(canvas.width / zoom / 2);
+  targetCamY = mapClickY - Math.floor(canvas.height / zoom / 2);
+  throttledVP();
+});
+
+// Quick action bar zoom buttons
+var qbarZoomIn = document.getElementById('qbarZoomIn');
+var qbarZoomOut = document.getElementById('qbarZoomOut');
+if (qbarZoomIn) qbarZoomIn.addEventListener('click', function() {
+  zoom = Math.min(32, zoom * 1.4);
+  zoom = Math.round(zoom * 100) / 100;
+  throttledVP();
+});
+if (qbarZoomOut) qbarZoomOut.addEventListener('click', function() {
+  zoom = Math.max(1, zoom / 1.4);
+  zoom = Math.round(zoom * 100) / 100;
+  throttledVP();
+});
 
 // Check Discord login status
 fetch('/auth/me').then(function(r) { return r.json(); }).then(function(d) {
