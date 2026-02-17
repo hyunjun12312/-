@@ -1013,6 +1013,43 @@ function terrainCorridorBonus(x, y, pi) {
   return bonus;
 }
 
+function compactBorderFill(pi, seedCells, maxExtraClaims) {
+  const p = players[pi];
+  if (!p || !p.alive || !seedCells || seedCells.length === 0 || maxExtraClaims <= 0) return 0;
+  const cb = CIVS[p.civ];
+  let extra = 0;
+  const seen = new Set();
+  for (let si = 0; si < seedCells.length && extra < maxExtraClaims; si++) {
+    const seed = seedCells[si];
+    for (let dy = -1; dy <= 1 && extra < maxExtraClaims; dy++) {
+      for (let dx = -1; dx <= 1 && extra < maxExtraClaims; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = seed.x + dx, ny = seed.y + dy;
+        const key = nx + ',' + ny;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (!validCell(nx, ny)) continue;
+        const ni = idx(nx, ny);
+        if (owner[ni] !== -1) continue;
+        if (!isPlayable(terrain[ni])) continue;
+        const fn = friendlyNeighborCount(nx, ny, pi);
+        const fn8 = friendlyNeighborCount8(nx, ny, pi);
+        if (fn < 3 && fn8 < 5) continue;
+        let cost = terrainTroopCost(terrain[ni]);
+        if (cb && cb.bonus.moveCost) cost = Math.max(100, Math.ceil(cost * cb.bonus.moveCost));
+        cost = Math.max(100, Math.ceil(cost * 0.45));
+        if (p.totalTroops < cost) continue;
+        p.totalTroops -= cost;
+        claimCell(nx, ny, pi);
+        p.stats.cellsClaimed++;
+        checkQuestProgress(p, 'expand', 1);
+        extra++;
+      }
+    }
+  }
+  return extra;
+}
+
 // ===== UNIT FUNCTIONS =====
 function createUnit(pi, type, tx, ty) {
   const p = players[pi]; if (!p || !p.alive) return null;
@@ -1542,6 +1579,7 @@ function expandToward(pi, tx, ty) {
 
   // Claim gap-fills first (they create smooth borders cheaply)
   let claimed = 0;
+  const claimedCells = [];
   const claimedSet = new Set();
   for (const g of gapFills) {
     if (p.totalTroops < 100) break;
@@ -1561,6 +1599,7 @@ function expandToward(pi, tx, ty) {
       p.stats.cellsClaimed++;
       checkQuestProgress(p, 'expand', 1);
       claimedSet.add(gk);
+      claimedCells.push({ x: g.x, y: g.y });
       claimed++;
       if (claimed >= 12) break; // max 12 gap fills per tick
     }
@@ -1584,12 +1623,14 @@ function expandToward(pi, tx, ty) {
       const tw = terrainWeight(terrain[ni]);
       const friendlyN = friendlyNeighborCount(nx, ny, pi);
       const friendlyN8 = friendlyNeighborCount8(nx, ny, pi);
+      if (friendlyN === 0 && friendlyN8 <= 1) continue;
+      if (friendlyN <= 1 && distToTarget > 8) continue;
       // Gap bonus: strongly prefer filling concavities
       const gapBonus = friendlyN >= 3 ? -8 : friendlyN >= 2 ? -3 : friendlyN8 >= 4 ? -2 : 0;
       // Organic noise: multi-octave for irregular borders
-      const noise = organicNoise(nx, ny, expandSeed) * 5;
+      const noise = organicNoise(nx, ny, expandSeed) * 2.2;
       // Flow noise: create corridor-like expansion along movement direction
-      const flow = flowNoise(nx, ny, dirX, dirY) * 2.5;
+      const flow = flowNoise(nx, ny, dirX, dirY) * 1.2;
       // Terrain corridor: prefer natural paths
       const corridor = terrainCorridorBonus(nx, ny, pi);
       // Distance from capital penalty (less aggressive than supply line, used here for shape)
@@ -1599,7 +1640,7 @@ function expandToward(pi, tx, ty) {
       const jitter = (Math.sin(nx * 73 + ny * 137 + expandSeed) * 0.5 + 0.5) * 2;
 
       // Width check: penalize cells that would create thin (1-wide) strips
-      const widthPenalty = friendlyN <= 1 && friendlyN8 <= 2 ? 4.0 : friendlyN <= 1 ? 2.0 : 0;
+      const widthPenalty = friendlyN <= 1 && friendlyN8 <= 2 ? 8.0 : friendlyN <= 1 ? 4.0 : 0;
       const score = distToTarget * 0.4 + tw * 1.8 + noise + flow + gapBonus + corridor + spreadPenalty + jitter + widthPenalty;
       candidateMap.set(key, { x: nx, y: ny, score, dist: distToTarget });
     }
@@ -1644,6 +1685,7 @@ function expandToward(pi, tx, ty) {
       p.stats.cellsClaimed++;
       checkQuestProgress(p, 'expand', 1);
       claimedSet.add(c.x + ',' + c.y);
+      claimedCells.push({ x: c.x, y: c.y });
       claimed++;
       const st = specialTiles[i];
       if (st === 3) {
@@ -1662,6 +1704,7 @@ function expandToward(pi, tx, ty) {
       checkQuestProgress(p, 'expand', 1);
       checkCampClear(pi, c.x, c.y);
       claimedSet.add(c.x + ',' + c.y);
+      claimedCells.push({ x: c.x, y: c.y });
       claimed++;
     } else {
       // Enemy territory — military conquest
@@ -1672,6 +1715,7 @@ function expandToward(pi, tx, ty) {
         claimCell(c.x, c.y, pi); p.stats.cellsClaimed++; p.stats.enemyCellsTaken++;
         checkQuestProgress(p, 'expand', 1); checkQuestProgress(p, 'conquer', 1);
         claimedSet.add(c.x + ',' + c.y);
+        claimedCells.push({ x: c.x, y: c.y });
         claimed++; continue;
       }
       if (areAllies(pi, cur)) continue;
@@ -1701,8 +1745,14 @@ function expandToward(pi, tx, ty) {
       }
       checkDeath(cur, pi);
       claimedSet.add(c.x + ',' + c.y);
+      claimedCells.push({ x: c.x, y: c.y });
       claimed++;
     }
+  }
+
+  if (claimedCells.length > 0) {
+    const smoothBudget = Math.min(8, Math.floor(claimed / 2) + 2);
+    compactBorderFill(pi, claimedCells, smoothBudget);
   }
 }
 
@@ -1734,20 +1784,18 @@ function borderPush(pi) {
         if (fn >= 3 || fn8 >= 5) {
           gapTargets.push({ x: nx, y: ny, cost: Math.max(100, Math.ceil(tc * 0.5)), fn });
         }
-        // Organic noise filter: only expand ~65% of border cells per push (creates irregular blobs)
         const noiseVal = organicNoise(nx, ny, pushSeed);
-        if (noiseVal > 0.35) {
-          // Terrain corridor bonus
-          const corr = terrainCorridorBonus(nx, ny, pi);
-          const score = tc + noiseVal * 3 + corr - fn * 1.5;
-          targets.push({ x: nx, y: ny, cost: tc, score });
-        }
+        // Terrain corridor bonus
+        const corr = terrainCorridorBonus(nx, ny, pi);
+        const score = tc + noiseVal * 1.2 + corr - fn * 2.2 - fn8 * 0.8;
+        targets.push({ x: nx, y: ny, cost: tc, score });
       }
     }
   }
   if (targets.length === 0 && gapTargets.length === 0) return;
 
   let claimed = 0;
+  const claimedCells = [];
   // Phase 2: Gap-fill first (cheap, makes borders smooth)
   gapTargets.sort((a, b) => b.fn - a.fn);
   for (const t of gapTargets) {
@@ -1755,6 +1803,7 @@ function borderPush(pi) {
     if (owner[idx(t.x, t.y)] === -1) {
       p.totalTroops -= t.cost;
       claimCell(t.x, t.y, pi);
+      claimedCells.push({ x: t.x, y: t.y });
       claimed++;
     }
   }
@@ -1765,8 +1814,13 @@ function borderPush(pi) {
     if (owner[idx(t.x, t.y)] === -1) {
       p.totalTroops -= t.cost;
       claimCell(t.x, t.y, pi);
+      claimedCells.push({ x: t.x, y: t.y });
       claimed++;
     }
+  }
+  if (claimedCells.length > 0) {
+    const smoothBudget = Math.min(10, Math.floor(claimed / 2) + 2);
+    claimed += compactBorderFill(pi, claimedCells, smoothBudget);
   }
   if (claimed === 0) { const sock = findSocket(pi); if (sock) sock.emit('msg', '병력 부족!'); return; }
   p.stats.cellsClaimed += claimed;
@@ -2656,17 +2710,15 @@ function playerState(pi) {
 }
 
 // Quick state: lightweight immediate update (just critical numbers)
-function sendQuickState(pi) {
+function sendQuickState(pi, activeUnitCount) {
   const sock = findSocket(pi);
   if (!sock) return;
   const p = players[pi]; if (!p) return;
+  const unitCount = activeUnitCount !== undefined ? activeUnitCount : units.filter(u => u.alive && u.owner === pi).length;
   sock.emit('qs', {
     tt: p.totalTroops, mt: maxTroops(p),
     r: { f: p.resources.f, w: p.resources.w, s: p.resources.s, g: p.resources.g },
-    activeUnits: units.filter(u => u.alive && u.owner === pi).length,
-    bCount: countPlayerBuildings(pi),
-    bMax: maxPlayerBuildings(pi),
-    pLv: getPlayerLevel(pi)
+    activeUnits: unitCount
   });
 }
 
@@ -2760,10 +2812,39 @@ const VIS_INT = 600;
 const CANNON_INT = 1000;
 const ROUND_INFO_INT = 1000;
 const FULL_ST_INT = 2000;
+const DIRTY_FLUSH_INT = 50;
+let lastDirtyFlush = 0;
+let currentVisInt = VIS_INT;
+let currentStInt = ST_INT;
+let currentUnitBroadcastInt = UNIT_BROADCAST_INT;
+let currentLbInt = LB_INT;
+let tickLagEma = 0;
+let lastTickAt = Date.now();
 
 function tick() {
   try {
   const now = Date.now();
+  const tickDelta = now - lastTickAt;
+  lastTickAt = now;
+  const loopLag = Math.max(0, tickDelta - TICK);
+  tickLagEma = tickLagEma * 0.92 + loopLag * 0.08;
+  const playerCount = Object.keys(pidMap).length;
+  if (tickLagEma > 80 || playerCount >= 14) {
+    currentVisInt = 1000;
+    currentStInt = 1000;
+    currentUnitBroadcastInt = 220;
+    currentLbInt = 2000;
+  } else if (tickLagEma > 40 || playerCount >= 8) {
+    currentVisInt = 800;
+    currentStInt = 700;
+    currentUnitBroadcastInt = 160;
+    currentLbInt = 1500;
+  } else {
+    currentVisInt = VIS_INT;
+    currentStInt = ST_INT;
+    currentUnitBroadcastInt = UNIT_BROADCAST_INT;
+    currentLbInt = LB_INT;
+  }
   // Lobby phase: just broadcast countdown, check if time to start
   if (roundPhase === 'lobby') {
     if (now - lastRoundInfo >= 1000) {
@@ -2783,19 +2864,24 @@ function tick() {
   if (now - lastTroop >= TROOP_INT) { lastTroop = now; genTroops(); io.emit('tg'); }
   if (now - lastBot >= BOT_INT) { lastBot = now; botAI(); }
   if (now - lastCamp >= CAMP_INT) { lastCamp = now; spawnCamp(); updateCamps(); }
-  if (now - lastVis >= VIS_INT) { lastVis = now; updateAllVisibility(); }
+  if (now - lastVis >= currentVisInt) { lastVis = now; updateAllVisibility(); }
   if (now - lastCannon >= CANNON_INT) { lastCannon = now; coastalDefenseTick(); }
   // Round info broadcast
   if (now - lastRoundInfo >= ROUND_INFO_INT) { lastRoundInfo = now; io.emit('roundInfo', getRoundInfo()); }
   // Win conditions
   checkWinConditions();
   // Flush any remaining dirty chunks from non-action sources (bots, camps, etc.)
-  if (dirtyChunks.size > 0) { flushDirtyToAll(); }
-  if (now - lastLB >= LB_INT) { lastLB = now; io.emit('lb', leaderboard()); }
-  if (now - lastST >= ST_INT) {
+  if (dirtyChunks.size > 0 && now - lastDirtyFlush >= DIRTY_FLUSH_INT) { lastDirtyFlush = now; flushDirtyToAll(); }
+  if (now - lastLB >= currentLbInt) { lastLB = now; io.emit('lb', leaderboard()); }
+  if (now - lastST >= currentStInt) {
     lastST = now;
+    const unitCountByOwner = {};
+    for (const u of units) {
+      if (!u.alive) continue;
+      unitCountByOwner[u.owner] = (unitCountByOwner[u.owner] || 0) + 1;
+    }
     for (const [sid, pi] of Object.entries(pidMap)) {
-      sendQuickState(pi);
+      sendQuickState(pi, unitCountByOwner[pi] || 0);
     }
   }
   if (now - lastFullST >= FULL_ST_INT) {
@@ -2805,7 +2891,7 @@ function tick() {
       const st = playerState(pi); if (st) sock.volatile.emit('st', st);
     }
   }
-  if (now - lastUnitBroadcast >= UNIT_BROADCAST_INT) {
+  if (now - lastUnitBroadcast >= currentUnitBroadcastInt) {
     lastUnitBroadcast = now;
     for (const [sid, pi] of Object.entries(pidMap)) {
       const sock = io.sockets.sockets.get(sid); if (!sock) continue;
