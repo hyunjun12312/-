@@ -134,7 +134,8 @@ const MAP_NAMES = [
   '카이로','베이징','런던','파리','이스탄불','모스크바','비엔나','프라하'
 ];
 const DEFENSE = [0, 1.0, 1.6, 2.0, 4.0, 1.8, 99, 0, 2.5, 1.4];
-const COMBO_WINDOW = 5000;
+const COMBO_WINDOW = 3000;
+const COMBO_COOLDOWN = 500; // min ms between combo increments
 
 // ===== CIVILIZATIONS =====
 const CIVS = {
@@ -1476,9 +1477,17 @@ function getUnitStates(pi) {
 function updateCombo(p) {
   const now = Date.now();
   const window = COMBO_WINDOW + (CIVS[p.civ] && CIVS[p.civ].bonus.comboWindow ? CIVS[p.civ].bonus.comboWindow : 0);
-  if (now - p.combo.lastTime < window) p.combo.count++;
-  else p.combo.count = 1;
-  p.combo.lastTime = now;
+  if (now - p.combo.lastTime > window) {
+    // window expired, reset
+    p.combo.count = 1;
+    p.combo.lastTime = now;
+    return 1;
+  }
+  // Only increment if cooldown elapsed (prevents per-tick buildup)
+  if (now - p.combo.lastTime >= COMBO_COOLDOWN) {
+    p.combo.count++;
+    p.combo.lastTime = now;
+  }
   return p.combo.count;
 }
 
@@ -1601,6 +1610,8 @@ function expandToward(pi, tx, ty) {
   // Weighted random from top candidates (not always best → organic irregularity)
   const topN = Math.min(candidates.length, maxCells * 3);
   const pool = candidates.slice(0, topN);
+  let enemyCellsTaken = 0;
+  let emptyCellsClaimed = 0;
 
   for (let attempts = 0; attempts < topN && claimed < maxCells && p.totalTroops >= 1; attempts++) {
     // Weighted selection: index^0.7 bias toward top of list but with randomness
@@ -1627,13 +1638,9 @@ function expandToward(pi, tx, ty) {
       claimCell(c.x, c.y, pi);
       p.stats.cellsClaimed++;
       checkQuestProgress(p, 'expand', 1);
-      // Aztec expandCombo: gain combo from expanding too
-      if (cb && cb.bonus.expandCombo) {
-        const combo = updateCombo(p);
-        if (combo >= 3) p.totalTroops = Math.min(maxTroops(p), p.totalTroops + Math.min(combo, 5));
-      }
       claimedSet.add(c.x + ',' + c.y);
       claimed++;
+      emptyCellsClaimed++;
       const st = specialTiles[i];
       if (st === 3) {
         const rf = Math.floor(Math.random() * 300) + 50, rg = Math.floor(Math.random() * 100) + 20;
@@ -1683,12 +1690,6 @@ function expandToward(pi, tx, ty) {
       claimCell(c.x, c.y, pi);
       p.stats.cellsClaimed++; p.stats.enemyCellsTaken++;
       checkQuestProgress(p, 'expand', 1); checkQuestProgress(p, 'conquer', 1);
-      const combo = updateCombo(p);
-      if (combo >= 2) {
-        const sock = findSocket(pi);
-        if (sock) sock.emit('combo', { count: combo });
-        p.totalTroops = Math.min(maxTroops(p), p.totalTroops + Math.min(combo * 2, 10));
-      }
       if (wasCapital) {
         p.resources.f += 200; p.resources.w += 200; p.resources.s += 100; p.resources.g += 100;
         const sock = findSocket(pi);
@@ -1697,6 +1698,25 @@ function expandToward(pi, tx, ty) {
       checkDeath(cur, pi);
       claimedSet.add(c.x + ',' + c.y);
       claimed++;
+      enemyCellsTaken++;
+    }
+  }
+
+  // === Post-loop combo logic (once per expandToward call) ===
+  if (enemyCellsTaken > 0) {
+    const combo = updateCombo(p);
+    if (combo >= 2) {
+      const sock = findSocket(pi);
+      if (sock) sock.emit('combo', { count: combo });
+      // Reward: scales with combo, capped at 8 troops
+      const reward = Math.min(Math.floor(combo * 1.5), 8);
+      p.totalTroops = Math.min(maxTroops(p), p.totalTroops + reward);
+    }
+  } else if (emptyCellsClaimed > 0 && cb && cb.bonus.expandCombo) {
+    // Aztec expand combo: gain combo from expanding empty land
+    const combo = updateCombo(p);
+    if (combo >= 3) {
+      p.totalTroops = Math.min(maxTroops(p), p.totalTroops + Math.min(combo, 4));
     }
   }
 }
