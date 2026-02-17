@@ -56,56 +56,6 @@ var lastExpTime = 0;
 function emitExp(x, y) {
   if (!mySt || mySt.tt < 1) return;
   socket.volatile.emit('exp', {x: x, y: y});
-  // Client-side prediction: immediately paint cells around click as owned
-  predictExpansion(x, y);
-}
-
-// Client-side prediction: paint cells locally BEFORE server confirms for zero-latency feel
-function predictExpansion(tx, ty) {
-  if (myPi < 0 || !myColor) return;
-  var radius = 5; // predict area around click
-  var WATER_TERRAINS = {0:1, 6:1, 7:1};
-  var changedChunks = {};
-  for (var dy = -radius; dy <= radius; dy++) {
-    for (var dx = -radius; dx <= radius; dx++) {
-      if (dx*dx + dy*dy > radius*radius + 1) continue;
-      var wx = tx + dx, wy = ty + dy;
-      if (wx < 0 || wy < 0 || wx >= mapW || wy >= mapH) continue;
-      var cx = Math.floor(wx / chunkSz), cy = Math.floor(wy / chunkSz);
-      var ck = cx + ',' + cy;
-      var c = chunks[ck];
-      if (!c) continue;
-      var lx = wx - cx * chunkSz, ly = wy - cy * chunkSz;
-      var li = ly * chunkSz + lx;
-      var curOwner = c.o[li];
-      var t = c.t[li];
-      // Only predict claiming unowned playable cells adjacent to own territory
-      if (curOwner >= 0) continue; // already owned
-      if (curOwner === -3) continue; // fog of war
-      if (WATER_TERRAINS[t]) continue; // water/ice
-      // Check if adjacent to own territory
-      var adjOwn = false;
-      for (var ad = 0; ad < 4; ad++) {
-        var ax = wx + (ad===0?-1:ad===1?1:0);
-        var ay = wy + (ad===2?-1:ad===3?1:0);
-        var acx = Math.floor(ax / chunkSz), acy = Math.floor(ay / chunkSz);
-        var ac = chunks[acx + ',' + acy];
-        if (!ac) continue;
-        var alx = ax - acx * chunkSz, aly = ay - acy * chunkSz;
-        if (alx >= 0 && alx < chunkSz && aly >= 0 && aly < chunkSz) {
-          if (ac.o[aly * chunkSz + alx] === myPi) { adjOwn = true; break; }
-        }
-      }
-      if (!adjOwn) continue;
-      // Predict: mark as owned locally
-      c.o[li] = myPi;
-      changedChunks[ck] = c;
-    }
-  }
-  // Re-render only changed chunks
-  for (var key in changedChunks) {
-    renderChunkToBuf(changedChunks[key]);
-  }
 }
 
 // Terrain colors — richer palette
