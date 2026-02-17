@@ -271,7 +271,7 @@ var smoothCam = true;
 // Edge scrolling
 var edgeScrollSpeed = 8;
 var edgeScrollMargin = 30;
-var edgeScrollEnabled = true;
+var edgeScrollEnabled = false;
 
 // Resource tracking for income rates
 var prevResources = null;
