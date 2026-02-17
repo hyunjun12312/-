@@ -99,10 +99,10 @@ app.get('/auth/logout', (req, res) => {
 });
 
 // ===== CONFIG =====
-const W = 800, H = 400, CHUNK = 50, TICK = 33;
+const W = 800, H = 400, CHUNK = 50, TICK = 16;
 const RES_INT = 10000, TROOP_INT = 5000;
-const BOT_INT = 2000, CAMP_INT = 15000, LB_INT = 1500, ST_INT = 400, SAVE_INT = 120000;
-const UNIT_BROADCAST_INT = 80;
+const BOT_INT = 2000, CAMP_INT = 15000, LB_INT = 1000, ST_INT = 150, SAVE_INT = 120000;
+const UNIT_BROADCAST_INT = 50;
 const BOT_COUNT = 8;
 const SAVE_FILE = './gamestate.json';
 
@@ -194,23 +194,65 @@ const STILE_KEYS = Object.keys(STILES);
 
 // ===== BUILDINGS =====
 const BLDG = {
-  hq:     { n:'본부', icon:'🏰',   base:{f:120,w:120,s:80,g:40},  time:25, desc:'+25 병력캡/Lv' },
-  bar:    { n:'병영', icon:'⚔️',   base:{f:80,w:60,s:30,g:20},    time:20, desc:'+10% 병력생산/Lv' },
-  farm:   { n:'농장', icon:'🌾',   base:{f:60,w:40,s:20,g:10},    time:15, desc:'+12% 식량/Lv' },
-  lum:    { n:'벌목장', icon:'🪵', base:{f:40,w:60,s:20,g:10},    time:15, desc:'+12% 목재/Lv' },
-  qry:    { n:'채석장', icon:'⛏️', base:{f:40,w:40,s:60,g:10},    time:15, desc:'+12% 석재/Lv' },
-  wall:   { n:'성벽', icon:'🧱',   base:{f:60,w:80,s:100,g:30},   time:30, desc:'+15% 주변방어/Lv (반경증가)' },
-  acad:   { n:'학술원', icon:'📚', base:{f:80,w:60,s:40,g:60},    time:25, desc:'-4% 건설/연구시간/Lv' },
-  spy:    { n:'첩보기관', icon:'🕵️', base:{f:50,w:30,s:20,g:80},  time:20, desc:'스파이 정보량 증가/Lv' },
-  market: { n:'시장', icon:'🏪',   base:{f:40,w:40,s:30,g:50},    time:18, desc:'+8% 교역효율/Lv' },
-  cannon: { n:'해안포대', icon:'💣', base:{f:100,w:120,s:100,g:60}, time:28, desc:'해안 배치, 적 해상유닛 자동 포격 (사거리/대미지 증가/Lv)' }
+  hq:     { n:'본부', icon:'🏰',   size:3, base:{f:120,w:120,s:80,g:40},  time:25, desc:'+25 병력캡/Lv (3×3)' },
+  bar:    { n:'병영', icon:'⚔️',   size:2, base:{f:80,w:60,s:30,g:20},    time:20, desc:'+10% 병력생산/Lv (2×2)' },
+  farm:   { n:'농장', icon:'🌾',   size:2, base:{f:60,w:40,s:20,g:10},    time:15, desc:'+12% 식량/Lv (2×2)' },
+  lum:    { n:'벌목장', icon:'🪵', size:2, base:{f:40,w:60,s:20,g:10},    time:15, desc:'+12% 목재/Lv (2×2)' },
+  qry:    { n:'채석장', icon:'⛏️', size:2, base:{f:40,w:40,s:60,g:10},    time:15, desc:'+12% 석재/Lv (2×2)' },
+  wall:   { n:'성벽', icon:'🧱',   size:1, base:{f:60,w:80,s:100,g:30},   time:30, desc:'+15% 주변방어/Lv (1×1)' },
+  acad:   { n:'학술원', icon:'📚', size:2, base:{f:80,w:60,s:40,g:60},    time:25, desc:'-4% 건설/연구시간/Lv (2×2)' },
+  spy:    { n:'첩보기관', icon:'🕵️', size:1, base:{f:50,w:30,s:20,g:80},  time:20, desc:'스파이 정보량 증가/Lv (1×1)' },
+  market: { n:'시장', icon:'🏪',   size:2, base:{f:40,w:40,s:30,g:50},    time:18, desc:'+8% 교역효율/Lv (2×2)' },
+  cannon: { n:'해안포대', icon:'💣', size:2, base:{f:100,w:120,s:100,g:60}, time:28, desc:'해안 배치, 적 해상유닛 자동 포격 (2×2)' }
 };
 
-// ===== MAP BUILDINGS (placed on territory) =====
-const mapBuildings = new Map(); // cellIndex → { type, level, owner, buildEnd }
+// ===== MAP BUILDINGS (placed on territory, multi-cell grid system) =====
+const mapBuildings = new Map(); // anchorCellIndex → { type, level, owner, buildEnd }
+const cellToAnchor = new Map(); // cellIndex → anchorCellIndex (ALL cells of multi-cell buildings)
 const BLDG_CODES = { hq:1, bar:2, farm:3, lum:4, qry:5, wall:6, acad:7, spy:8, market:9, cannon:10 };
 const BLDG_FROM_CODE = {};
 for (const k in BLDG_CODES) BLDG_FROM_CODE[BLDG_CODES[k]] = k;
+
+// Get all cell indices for an NxN building anchored at anchorIdx
+function getBuildingCells(anchorIdx, size) {
+  const ax = anchorIdx % W, ay = Math.floor(anchorIdx / W);
+  const cells = [];
+  for (let dy = 0; dy < size; dy++) {
+    for (let dx = 0; dx < size; dx++) {
+      const cx = ax + dx, cy = ay + dy;
+      if (validCell(cx, cy)) cells.push(idx(cx, cy));
+    }
+  }
+  return cells;
+}
+
+// Check if an NxN building can be placed at anchor position
+function canPlaceBuildingAt(pi, anchorIdx, size) {
+  const ax = anchorIdx % W, ay = Math.floor(anchorIdx / W);
+  for (let dy = 0; dy < size; dy++) {
+    for (let dx = 0; dx < size; dx++) {
+      const cx = ax + dx, cy = ay + dy;
+      if (!validCell(cx, cy)) return false;
+      const ci = idx(cx, cy);
+      if (owner[ci] !== pi) return false;
+      if (cellToAnchor.has(ci)) return false;
+    }
+  }
+  return true;
+}
+
+// Remove a building entirely (anchor + all cells)
+function removeBuilding(anchorIdx) {
+  const b = mapBuildings.get(anchorIdx);
+  if (!b) return;
+  const size = (BLDG[b.type] || {}).size || 1;
+  const cells = getBuildingCells(anchorIdx, size);
+  for (const ci of cells) {
+    cellToAnchor.delete(ci);
+    markDirty(ci % W, Math.floor(ci / W));
+  }
+  mapBuildings.delete(anchorIdx);
+}
 
 function recalcPlayerBuildings(pi) {
   const p = players[pi]; if (!p) return;
@@ -239,25 +281,42 @@ function getHqLevel(pi) {
   return maxL;
 }
 
+// Player level based on total building count
+function getPlayerLevel(pi) {
+  const count = countPlayerBuildings(pi);
+  return Math.floor(Math.sqrt(count)) + 1;
+}
+
+// No hard cap on buildings — territory + resources are natural limits
 function maxPlayerBuildings(pi) {
-  return 3 + getHqLevel(pi);
+  const cells = playerCells[pi] ? playerCells[pi].size : 0;
+  return Math.max(5, Math.floor(cells / 10));
 }
 
 function placeBuildingOnMap(pi, cellIdx, type) {
   const p = players[pi]; if (!p || !p.alive) return null;
-  if (owner[cellIdx] !== pi) return null;
-  if (mapBuildings.has(cellIdx)) return null;
-  if (!BLDG[type]) return null;
-  const current = countPlayerBuildings(pi);
-  const max = maxPlayerBuildings(pi);
-  if (current >= max) return null;
-  if (type === 'hq') {
-    for (const [ci, b] of mapBuildings) { if (b.owner === pi && b.type === 'hq') return null; }
+  const def = BLDG[type]; if (!def) return null;
+  const size = def.size || 1;
+  // If clicking on an existing building of same type → upgrade
+  if (cellToAnchor.has(cellIdx)) {
+    const anchorIdx = cellToAnchor.get(cellIdx);
+    const existing = mapBuildings.get(anchorIdx);
+    if (existing && existing.owner === pi && existing.type === type) {
+      return upgradeBuildingOnMap(pi, anchorIdx);
+    }
+    return null; // occupied by different building
   }
-  // Cannon must be placed on coastal tiles only
+  if (owner[cellIdx] !== pi) return null;
+  // Check all NxN cells are valid
+  if (!canPlaceBuildingAt(pi, cellIdx, size)) return null;
+  // Cannon: at least one cell must be coastal
   if (type === 'cannon') {
-    const cx = cellIdx % W, cy = Math.floor(cellIdx / W);
-    if (!isCoastalCell(cx, cy)) return null;
+    let hasCoastal = false;
+    const ax = cellIdx % W, ay = Math.floor(cellIdx / W);
+    for (let dy = 0; dy < size && !hasCoastal; dy++)
+      for (let dx = 0; dx < size && !hasCoastal; dx++)
+        if (isCoastalCell(ax + dx, ay + dy)) hasCoastal = true;
+    if (!hasCoastal) return null;
   }
   const c = bldgCost(type, 0);
   if (!canAfford(p, c)) return null;
@@ -265,25 +324,30 @@ function placeBuildingOnMap(pi, cellIdx, type) {
   const buildTime = bldgTime(type, 0, p);
   const b = { type, level: 0, owner: pi, buildEnd: Date.now() + buildTime };
   mapBuildings.set(cellIdx, b);
-  const x = cellIdx % W, y = Math.floor(cellIdx / W);
-  markDirty(x, y);
+  // Mark all NxN cells as occupied
+  const cells = getBuildingCells(cellIdx, size);
+  for (const ci of cells) {
+    cellToAnchor.set(ci, cellIdx);
+    markDirty(ci % W, Math.floor(ci / W));
+  }
   return b;
 }
 
-function upgradeBuildingOnMap(pi, cellIdx) {
+function upgradeBuildingOnMap(pi, anchorIdx) {
   const p = players[pi]; if (!p || !p.alive) return null;
-  const b = mapBuildings.get(cellIdx);
+  const b = mapBuildings.get(anchorIdx);
   if (!b || b.owner !== pi) return null;
   if (b.buildEnd > 0) return null;
-  const hqLevel = getHqLevel(pi);
-  const maxLv = b.type === 'hq' ? 25 : Math.min(25, hqLevel);
+  const playerLv = getPlayerLevel(pi);
+  const maxLv = Math.min(25, playerLv * 3);
   if (b.level >= maxLv) return null;
   const c = bldgCost(b.type, b.level);
   if (!canAfford(p, c)) return null;
   payCost(p, c);
   b.buildEnd = Date.now() + bldgTime(b.type, b.level, p);
-  const x = cellIdx % W, y = Math.floor(cellIdx / W);
-  markDirty(x, y);
+  const size = (BLDG[b.type] || {}).size || 1;
+  const cells = getBuildingCells(anchorIdx, size);
+  for (const ci of cells) { markDirty(ci % W, Math.floor(ci / W)); }
   return b;
 }
 
@@ -342,7 +406,25 @@ function flushDirtyToPlayer(pi) {
     if (cx * CHUNK + CHUNK >= v.x && cx * CHUNK < v.x + v.w && cy * CHUNK + CHUNK >= v.y && cy * CHUNK < v.y + v.h)
       toSend.push(packChunkForPlayer(cx, cy, pi));
   }
-  if (toSend.length > 0) sock.emit('ch', toSend);
+  if (toSend.length > 0) sock.volatile.emit('ch', toSend);
+}
+
+// Immediately flush dirty chunks to ALL connected players in viewport
+function flushDirtyToAll() {
+  if (dirtyChunks.size === 0) return;
+  const dirty = Array.from(dirtyChunks);
+  for (const [sid, pi] of Object.entries(pidMap)) {
+    const sock = io.sockets.sockets.get(sid); if (!sock || !sock.vp) continue;
+    const toSend = [];
+    for (const ck of dirty) {
+      const [cx, cy] = ck.split(',').map(Number);
+      const v = sock.vp;
+      if (cx * CHUNK + CHUNK >= v.x && cx * CHUNK < v.x + v.w && cy * CHUNK + CHUNK >= v.y && cy * CHUNK < v.y + v.h)
+        toSend.push(packChunkForPlayer(cx, cy, pi));
+    }
+    if (toSend.length > 0) sock.volatile.emit('ch', toSend);
+  }
+  dirtyChunks.clear();
 }
 function idx(x, y) { return y * W + x; }
 function validCell(x, y) { return x >= 0 && y >= 0 && x < W && y < H; }
@@ -351,14 +433,15 @@ function isPlayable(t) { return t === 1 || t === 2 || t === 3 || t === 4 || t ==
 function claimCell(x, y, pi) {
   const i = idx(x, y), prev = owner[i];
   if (prev >= 0 && prev !== pi && playerCells[prev]) playerCells[prev].delete(i);
-  // Transfer building ownership on capture
-  const bld = mapBuildings.get(i);
-  if (bld && bld.owner !== pi) {
-    const oldOwner = bld.owner;
-    bld.owner = pi;
-    if (bld.buildEnd > 0) { bld.buildEnd = 0; } // cancel construction, keep current level
-    recalcPlayerBuildings(oldOwner);
-    recalcPlayerBuildings(pi);
+  // Destroy enemy buildings when capturing any cell they occupy
+  if (cellToAnchor.has(i)) {
+    const anchorIdx = cellToAnchor.get(i);
+    const bld = mapBuildings.get(anchorIdx);
+    if (bld && bld.owner !== pi) {
+      const oldOwner = bld.owner;
+      removeBuilding(anchorIdx);
+      recalcPlayerBuildings(oldOwner);
+    }
   }
   owner[i] = pi; troops[i] = 0;
   if (!playerCells[pi]) playerCells[pi] = new Set();
@@ -637,9 +720,22 @@ function placePlayerAt(pi, x, y) {
       }
     }
   }
-  // Place HQ building at capital
-  const capIdx = idx(x, y);
-  mapBuildings.set(capIdx, { type: 'hq', level: 1, owner: pi, buildEnd: 0 });
+  // Place HQ building at capital (3x3 centered on capital)
+  const hqSize = BLDG.hq.size || 3;
+  const hqAnchorX = Math.max(0, Math.min(W - hqSize, x - Math.floor(hqSize / 2)));
+  const hqAnchorY = Math.max(0, Math.min(H - hqSize, y - Math.floor(hqSize / 2)));
+  const hqAnchorIdx = idx(hqAnchorX, hqAnchorY);
+  // Ensure all HQ cells are owned
+  for (let dy = 0; dy < hqSize; dy++) {
+    for (let dx = 0; dx < hqSize; dx++) {
+      const cx2 = hqAnchorX + dx, cy2 = hqAnchorY + dy;
+      if (validCell(cx2, cy2) && owner[idx(cx2, cy2)] !== pi) claimCell(cx2, cy2, pi);
+    }
+  }
+  const hqB = { type: 'hq', level: 1, owner: pi, buildEnd: 0 };
+  mapBuildings.set(hqAnchorIdx, hqB);
+  const hqCells = getBuildingCells(hqAnchorIdx, hqSize);
+  for (const ci of hqCells) cellToAnchor.set(ci, hqAnchorIdx);
   recalcPlayerBuildings(pi);
 }
 
@@ -649,14 +745,13 @@ function respawnPlayer(pi, civ, prefX, prefY) {
     for (const ci of playerCells[pi]) {
       const cx2 = ci % W, cy2 = Math.floor(ci / W);
       owner[ci] = -1; troops[ci] = 0; markDirty(cx2, cy2);
-      mapBuildings.delete(ci);
     }
     playerCells[pi].clear();
   }
   // Remove any remaining buildings owned by this player
-  for (const [ci, b] of mapBuildings) {
-    if (b.owner === pi) mapBuildings.delete(ci);
-  }
+  const toRemove = [];
+  for (const [ci, b] of mapBuildings) { if (b.owner === pi) toRemove.push(ci); }
+  for (const ci of toRemove) removeBuilding(ci);
   p.alive = true; p.offline = false; p.civ = civ || p.civ;
   p.resources = initResources(); p.buildings = initBuildings(); p.tech = initTech();
   p.totalTroops = 80;
@@ -1374,7 +1469,7 @@ function expandToward(pi, tx, ty) {
   const p = players[pi]; if (!p || !p.alive) return;
   if (p.totalTroops < 1) return;
   const now = Date.now();
-  if (now - (p.lastExpand || 0) < 30) return;
+  // No throttle — real-time expansion
   p.lastExpand = now;
   const cb = CIVS[p.civ];
   const expandSeed = (p.capital ? p.capital.x * 137 + p.capital.y * 311 : pi * 997) + (now % 10000);
@@ -1482,9 +1577,9 @@ function expandToward(pi, tx, ty) {
   candidates.sort((a, b) => a.score - b.score);
 
   // Dynamic max cells: based on troop count, expand more when strong
-  const baseCells = 4;
-  const troopBonus = Math.floor(p.totalTroops / 30);
-  const maxCells = Math.min(baseCells + troopBonus, 12);
+  const baseCells = 6;
+  const troopBonus = Math.floor(p.totalTroops / 20);
+  const maxCells = Math.min(baseCells + troopBonus, 18);
   
   // Weighted random from top candidates (not always best → organic irregularity)
   const topN = Math.min(candidates.length, maxCells * 3);
@@ -2610,7 +2705,7 @@ function loadGame() {
 // ===== TICK =====
 let lastRes = 0, lastTroop = 0, lastBot = 0, lastCamp = 0, lastLB = 0, lastST = 0, lastSave = 0, lastVis = 0, lastUnitBroadcast = 0, lastCannon = 0;
 let lastStorm = 0, lastRoundInfo = 0;
-const VIS_INT = 400;
+const VIS_INT = 300;
 const CANNON_INT = 1000;
 const ROUND_INFO_INT = 1000;
 
@@ -2642,33 +2737,21 @@ function tick() {
   if (now - lastRoundInfo >= ROUND_INFO_INT) { lastRoundInfo = now; io.emit('roundInfo', getRoundInfo()); }
   // Win conditions
   checkWinConditions();
-  if (dirtyChunks.size > 0) {
-    const dirty = Array.from(dirtyChunks); dirtyChunks.clear();
-    for (const [sid, pi] of Object.entries(pidMap)) {
-      const sock = io.sockets.sockets.get(sid); if (!sock || !sock.vp) continue;
-      const toSend = [];
-      for (const ck of dirty) {
-        const [cx, cy] = ck.split(',').map(Number);
-        const v = sock.vp;
-        if (cx * CHUNK + CHUNK >= v.x && cx * CHUNK < v.x + v.w && cy * CHUNK + CHUNK >= v.y && cy * CHUNK < v.y + v.h)
-          toSend.push(packChunkForPlayer(cx, cy, pi));
-      }
-      if (toSend.length > 0) sock.emit('ch', toSend);
-    }
-  }
+  // Flush any remaining dirty chunks from non-action sources (bots, camps, etc.)
+  if (dirtyChunks.size > 0) { flushDirtyToAll(); }
   if (now - lastLB >= LB_INT) { lastLB = now; io.emit('lb', leaderboard()); }
   if (now - lastST >= ST_INT) {
     lastST = now;
     for (const [sid, pi] of Object.entries(pidMap)) {
       const sock = io.sockets.sockets.get(sid); if (!sock) continue;
-      const st = playerState(pi); if (st) sock.emit('st', st);
+      const st = playerState(pi); if (st) sock.volatile.emit('st', st);
     }
   }
   if (now - lastUnitBroadcast >= UNIT_BROADCAST_INT) {
     lastUnitBroadcast = now;
     for (const [sid, pi] of Object.entries(pidMap)) {
       const sock = io.sockets.sockets.get(sid); if (!sock) continue;
-      sock.emit('units', getUnitStates(pi));
+      sock.volatile.emit('units', getUnitStates(pi));
     }
   }
   if (!IS_RAILWAY && now - lastSave >= SAVE_INT) { lastSave = now; saveGame(); }
@@ -2782,9 +2865,9 @@ io.on('connection', (socket) => {
     if (chunks.length > 0) socket.emit('ch', chunks);
   });
 
-  socket.on('exp', (d) => { if (!d) return; const pi = pidMap[socket.id]; if (pi !== undefined) { expandToward(pi, d.x, d.y); flushDirtyToPlayer(pi); sendQuickState(pi); } });
-  socket.on('bpush', () => { const pi = pidMap[socket.id]; if (pi !== undefined) { borderPush(pi); flushDirtyToPlayer(pi); sendQuickState(pi); } });
-  socket.on('matk', (d) => { if (!d) return; const pi = pidMap[socket.id]; if (pi !== undefined) { massiveAttack(pi, d.tx, d.ty); flushDirtyToPlayer(pi); sendQuickState(pi); } });
+  socket.on('exp', (d) => { if (!d) return; const pi = pidMap[socket.id]; if (pi !== undefined) { expandToward(pi, d.x, d.y); flushDirtyToAll(); sendQuickState(pi); } });
+  socket.on('bpush', () => { const pi = pidMap[socket.id]; if (pi !== undefined) { borderPush(pi); flushDirtyToAll(); sendQuickState(pi); } });
+  socket.on('matk', (d) => { if (!d) return; const pi = pidMap[socket.id]; if (pi !== undefined) { massiveAttack(pi, d.tx, d.ty); flushDirtyToAll(); sendQuickState(pi); } });
 
   // Building placement: place new building on territory
   socket.on('bld', (d) => {
@@ -2806,7 +2889,7 @@ io.on('connection', (socket) => {
       const result = upgradeBuildingOnMap(pi, cellIdx);
       if (result) {
         socket.emit('msg', def.icon + ' ' + def.n + ' Lv.' + result.level + '\u2192' + (result.level+1) + ' \uc5c5\uadf8\ub808\uc774\ub4dc \uc2dc\uc791!');
-        flushDirtyToPlayer(pi); sendQuickState(pi);
+        flushDirtyToAll(); sendQuickState(pi);
       } else { socket.emit('msg', '\uc5c5\uadf8\ub808\uc774\ub4dc \ubd88\uac00! (\uc790\uc6d0/\ub808\ubca8 \ud655\uc778)'); }
       return;
     }
@@ -2816,7 +2899,7 @@ io.on('connection', (socket) => {
     const result = placeBuildingOnMap(pi, cellIdx, key);
     if (result) {
       socket.emit('msg', def.icon + ' ' + def.n + ' \uac74\uc124 \uc2dc\uc791!');
-      flushDirtyToPlayer(pi); sendQuickState(pi);
+      flushDirtyToAll(); sendQuickState(pi);
     } else { socket.emit('msg', '\uac74\uc124 \ubd88\uac00! (\uc790\uc6d0/\uc870\uac74 \ud655\uc778)'); }
   });
 

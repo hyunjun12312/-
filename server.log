@@ -1,6 +1,6 @@
 [Territory.io v5 — Lobby Mode] Starting...
-[MapGen] Seed=44186 Size=800x400
-[MapGen] Done 253ms — 28.8% land, 435 river, 9 ranges
-[MapGen] Generated 252 special tiles
-[Lobby] First lobby — Map: 바그다드, 92313 playable cells
+[MapGen] Seed=43961 Size=800x400
+[MapGen] Done 251ms — 31.1% land, 463 river, 5 ranges
+[MapGen] Generated 295 special tiles
+[Lobby] First lobby — Map: 장안, 99403 playable cells
 [Server] Listening on http://0.0.0.0:3000
