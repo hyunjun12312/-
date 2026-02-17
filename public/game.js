@@ -845,7 +845,6 @@ socket.on('tp', function(d) {
   renderLobbyMapPreview();
 });
 
-socket.on('combo', function(d) { showCombo(d.count); });
 socket.on('streak', function(d) { showStreak(d.count, d.reward); });
 socket.on('questDone', function(d) { showQuestDone(d); });
 socket.on('skillFx', function(d) { showSkillEffect(d.skill, d.claimed); });
@@ -2652,19 +2651,6 @@ function showRewardBox(msg) {
   if (!el) return;
   el.textContent = msg; el.style.display = '';
   setTimeout(function() { el.style.display='none'; }, 3000);
-}
-
-function showCombo(count) {
-  var el = document.getElementById('comboNotif');
-  if (!el) return;
-  el.textContent = count + 'x COMBO! \uD83D\uDD25';
-  el.style.display = ''; el.style.animation = 'none';
-  void el.offsetHeight; el.style.animation = '';
-  setTimeout(function() { el.style.display='none'; }, 1200);
-  var flash = document.createElement('div');
-  flash.className = 'screen-flash';
-  document.body.appendChild(flash);
-  setTimeout(function() { flash.remove(); }, 400);
 }
 
 function showStreak(count, reward) {

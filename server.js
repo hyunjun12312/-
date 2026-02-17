@@ -134,9 +134,6 @@ const MAP_NAMES = [
   '카이로','베이징','런던','파리','이스탄불','모스크바','비엔나','프라하'
 ];
 const DEFENSE = [0, 1.0, 1.6, 2.0, 4.0, 1.8, 99, 0, 2.5, 1.4];
-const COMBO_WINDOW = 3000;
-const COMBO_COOLDOWN = 500; // min ms between combo increments
-
 // ===== CIVILIZATIONS =====
 const CIVS = {
   rome:   { icon:'\uD83C\uDFDB\uFE0F', n:'\uB85C\uB9C8',     desc:'\uAC74\uC124\uC18D\uB3C4 -10%',          bonus:{ buildSpd:0.9 }},
@@ -145,7 +142,7 @@ const CIVS = {
   viking: { icon:'\u2694\uFE0F', n:'\uBC14\uC774\uD0B9',   desc:'\uACF5\uACA9\uB825 +15%, \uC804\uD22C\uBCF4\uC0C1 +25%',       bonus:{ atk:1.15, combatReward:1.25 }},
   china:  { icon:'\uD83D\uDC09', n:'\uC911\uAD6D',     desc:'\uAE30\uC220\uC5F0\uAD6C -15%, \uCD5C\uB300\uAC74\uBB3C\uB808\uBCA8 +2',   bonus:{ techSpd:0.85, bldgBonus:2 }},
   persia: { icon:'\uD83D\uDC51', n:'\uD398\uB974\uC2DC\uC544', desc:'\uAD50\uC5ED\uBE44\uC728 +20%, \uC678\uAD50\uBC29\uC5B4 +10%',    bonus:{ trade:1.2, dipDef:1.1 }},
-  aztec:  { icon:'\uD83C\uDF3F', n:'\uC544\uC988\uD14D',   desc:'\uC57C\uB9CC\uC871\uBCF4\uC0C1 +60%, \uCF64\uBCF4\uC9C0\uC18D +2\uCD08, \uD655\uC7A5\uCF64\uBCF4',   bonus:{ barbReward:1.6, comboWindow:2000, expandCombo:true }},
+  aztec:  { icon:'\uD83C\uDF3F', n:'\uC544\uC988\uD14D',   desc:'\uC57C\uB9CC\uC871\uBCF4\uC0C1 +60%, \uD655\uC7A5\uBE44\uC6A9 -10%',   bonus:{ barbReward:1.6, moveCost:0.9 }},
   japan:  { icon:'\u26E9\uFE0F', n:'\uC77C\uBCF8',     desc:'\uBC29\uC5B4\uB825 +20%, \uBCD1\uB825 \uCD5C\uB300\uCE58 +15%',    bonus:{ def:1.2, troopCap:1.15 }}
 };
 
@@ -697,7 +694,6 @@ function spawnPlayer(name, civ, isBot) {
     protection: Date.now() + 30000,
     spawnTime: Date.now(),
     shieldEnd: 0,
-    combo: { count: 0, lastTime: 0 },
     killStreak: 0, bestStreak: 0, questStreak: 0,
     lastExpand: 0,
     stats: initStats()
@@ -770,7 +766,7 @@ function respawnPlayer(pi, civ, prefX, prefY) {
   p.resources = initResources(); p.buildings = initBuildings(); p.tech = initTech();
   p.totalTroops = 80;
   p.protection = Date.now() + 30000; p.spawnTime = Date.now();
-  p.shieldEnd = 0; p.combo = { count: 0, lastTime: 0 };
+  p.shieldEnd = 0;
   p.killStreak = 0; p.questStreak = 0; p.lastExpand = 0; p.stats = initStats();
   p.quests = generateQuests(p);
   const cb = CIVS[p.civ];
@@ -1474,23 +1470,6 @@ function getUnitStates(pi) {
   return result;
 }
 
-function updateCombo(p) {
-  const now = Date.now();
-  const window = COMBO_WINDOW + (CIVS[p.civ] && CIVS[p.civ].bonus.comboWindow ? CIVS[p.civ].bonus.comboWindow : 0);
-  if (now - p.combo.lastTime > window) {
-    // window expired, reset
-    p.combo.count = 1;
-    p.combo.lastTime = now;
-    return 1;
-  }
-  // Only increment if cooldown elapsed (prevents per-tick buildup)
-  if (now - p.combo.lastTime >= COMBO_COOLDOWN) {
-    p.combo.count++;
-    p.combo.lastTime = now;
-  }
-  return p.combo.count;
-}
-
 function expandToward(pi, tx, ty) {
   const p = players[pi]; if (!p || !p.alive) return;
   if (p.totalTroops < 1) return;
@@ -1610,9 +1589,6 @@ function expandToward(pi, tx, ty) {
   // Weighted random from top candidates (not always best → organic irregularity)
   const topN = Math.min(candidates.length, maxCells * 3);
   const pool = candidates.slice(0, topN);
-  let enemyCellsTaken = 0;
-  let emptyCellsClaimed = 0;
-
   for (let attempts = 0; attempts < topN && claimed < maxCells && p.totalTroops >= 1; attempts++) {
     // Weighted selection: index^0.7 bias toward top of list but with randomness
     const r = Math.pow(Math.random(), 0.7);
@@ -1640,7 +1616,6 @@ function expandToward(pi, tx, ty) {
       checkQuestProgress(p, 'expand', 1);
       claimedSet.add(c.x + ',' + c.y);
       claimed++;
-      emptyCellsClaimed++;
       const st = specialTiles[i];
       if (st === 3) {
         const rf = Math.floor(Math.random() * 300) + 50, rg = Math.floor(Math.random() * 100) + 20;
@@ -1698,25 +1673,6 @@ function expandToward(pi, tx, ty) {
       checkDeath(cur, pi);
       claimedSet.add(c.x + ',' + c.y);
       claimed++;
-      enemyCellsTaken++;
-    }
-  }
-
-  // === Post-loop combo logic (once per expandToward call) ===
-  if (enemyCellsTaken > 0) {
-    const combo = updateCombo(p);
-    if (combo >= 2) {
-      const sock = findSocket(pi);
-      if (sock) sock.emit('combo', { count: combo });
-      // Reward: scales with combo, capped at 8 troops
-      const reward = Math.min(Math.floor(combo * 1.5), 8);
-      p.totalTroops = Math.min(maxTroops(p), p.totalTroops + reward);
-    }
-  } else if (emptyCellsClaimed > 0 && cb && cb.bonus.expandCombo) {
-    // Aztec expand combo: gain combo from expanding empty land
-    const combo = updateCombo(p);
-    if (combo >= 3) {
-      p.totalTroops = Math.min(maxTroops(p), p.totalTroops + Math.min(combo, 4));
     }
   }
 }
