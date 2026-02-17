@@ -63,7 +63,7 @@ function emitExp(x, y) {
 // Client-side prediction: paint cells locally BEFORE server confirms for zero-latency feel
 function predictExpansion(tx, ty) {
   if (myPi < 0 || !myColor) return;
-  var radius = 3; // predict small area around click
+  var radius = 5; // predict area around click
   var WATER_TERRAINS = {0:1, 6:1, 7:1};
   var changedChunks = {};
   for (var dy = -radius; dy <= radius; dy++) {
@@ -301,7 +301,7 @@ function fmtNum(n) {
 
 // Smooth camera
 var targetCamX = 0, targetCamY = 0;
-var camLerp = 0.45;
+var camLerp = 0.6;
 var smoothCam = true;
 
 // ===== PARTICLE SYSTEM =====
@@ -648,6 +648,7 @@ socket.on('qs', function(d) {
   if (d.activeUnits !== undefined) mySt.activeUnits = d.activeUnits;
   if (d.bCount !== undefined) mySt.bCount = d.bCount;
   if (d.bMax !== undefined) mySt.bMax = d.bMax;
+  if (d.pLv !== undefined) mySt.pLv = d.pLv;
   // Immediate UI refresh for resource bar only
   document.getElementById('rTroop').textContent = '\u2694\uFE0F ' + fmtNum(d.tt) + '/' + fmtNum(d.mt);
   document.getElementById('rFood').textContent = '\uD83C\uDF3E ' + fmtNum(d.r.f);
@@ -1142,10 +1143,11 @@ function renderChunkToBuf(c) {
 function draw() {
   var w = canvas.width, h = canvas.height;
 
-  // Smooth camera lerp
+  // Smooth camera lerp — snap quickly
   if (smoothCam && !dragging) {
-    camX += (targetCamX - camX) * camLerp;
-    camY += (targetCamY - camY) * camLerp;
+    var dx = targetCamX - camX, dy = targetCamY - camY;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) { camX = targetCamX; camY = targetCamY; }
+    else { camX += dx * camLerp; camY += dy * camLerp; }
   }
 
   // Dark background
@@ -1228,7 +1230,7 @@ function draw() {
     }
   }
 
-  // ===== BUILDING ICONS ON MAP =====
+  // ===== BUILDING ICONS ON MAP (multi-cell grid) =====
   if (zoom >= 6) {
     var bvx0 = Math.floor(camX), bvy0 = Math.floor(camY);
     var bvx1 = Math.ceil(camX + canvas.width/zoom), bvy1 = Math.ceil(camY + canvas.height/zoom);
@@ -1243,28 +1245,55 @@ function draw() {
         if (blv === 0) continue;
         var isConstructing = blv < 0;
         var absVal = Math.abs(blv);
+        var isSecondary = absVal > 2000;
+        if (isSecondary) absVal -= 2000;
         var bTypeCode = Math.floor(absVal / 100);
         var bLevel = absVal % 100;
         var bTypeKey = BLDG_FROM_CODE[bTypeCode];
         if (!bTypeKey || !BLDG[bTypeKey]) continue;
         var bDef = BLDG[bTypeKey];
-        var bpx = (bvx - camX) * zoom + zoom/2;
-        var bpy = (bvy - camY) * zoom + zoom/2;
-        // Building icon
+        var bSize = bDef.size || 1;
+
+        if (isSecondary) {
+          // Secondary cell: just draw a subtle tint overlay
+          ctx.save();
+          if (isConstructing) ctx.globalAlpha = 0.15 + Math.sin(Date.now()/300) * 0.05;
+          else ctx.globalAlpha = 0.12;
+          ctx.fillStyle = '#4488ff';
+          ctx.fillRect((bvx - camX) * zoom, (bvy - camY) * zoom, zoom, zoom);
+          ctx.restore();
+          continue;
+        }
+
+        // Anchor cell: draw building icon spanning NxN
+        var bpx = (bvx - camX) * zoom + (bSize * zoom) / 2;
+        var bpy = (bvy - camY) * zoom + (bSize * zoom) / 2;
         ctx.save();
         if (isConstructing) { ctx.globalAlpha = 0.5 + Math.sin(Date.now()/300) * 0.2; }
-        ctx.font = Math.max(10, zoom * 0.8) + 'px sans-serif';
+        // Draw building background area
+        if (bSize > 1 && zoom >= 8) {
+          ctx.fillStyle = 'rgba(68,136,255,0.1)';
+          ctx.strokeStyle = 'rgba(68,136,255,0.3)';
+          ctx.lineWidth = 1;
+          ctx.fillRect((bvx - camX) * zoom, (bvy - camY) * zoom, bSize * zoom, bSize * zoom);
+          ctx.strokeRect((bvx - camX) * zoom, (bvy - camY) * zoom, bSize * zoom, bSize * zoom);
+        }
+        // Icon scaled to building size
+        var iconSize = Math.max(10, zoom * bSize * 0.6);
+        ctx.font = iconSize + 'px sans-serif';
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText(bDef.icon || '\ud83c\udfd7', bpx, bpy);
         // Level badge
-        if (bLevel > 0 && zoom >= 10) {
-          ctx.font = 'bold ' + Math.max(7, zoom * 0.35) + 'px sans-serif';
+        if (bLevel > 0 && zoom >= 8) {
+          ctx.font = 'bold ' + Math.max(7, zoom * 0.4) + 'px sans-serif';
           ctx.fillStyle = isConstructing ? '#ffaa00' : '#fff';
           ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
-          ctx.strokeText(bLevel, bpx + zoom*0.35, bpy + zoom*0.35);
-          ctx.fillText(bLevel, bpx + zoom*0.35, bpy + zoom*0.35);
+          var badgeX = (bvx - camX) * zoom + bSize * zoom - zoom * 0.2;
+          var badgeY = (bvy - camY) * zoom + bSize * zoom - zoom * 0.2;
+          ctx.strokeText('Lv' + bLevel, badgeX, badgeY);
+          ctx.fillText('Lv' + bLevel, badgeX, badgeY);
         }
-        // Cannon range ring (show for own cannons when zoomed in)
+        // Cannon range ring
         if (bTypeKey === 'cannon' && !isConstructing && bLevel > 0 && zoom >= 3) {
           var cRng = (4 + bLevel * 2) * zoom;
           var cPulse = 0.3 + Math.sin(Date.now()/800) * 0.1;
@@ -1275,7 +1304,6 @@ function draw() {
           ctx.lineWidth = 1.5;
           ctx.stroke();
           ctx.setLineDash([]);
-          // Inner danger zone fill
           ctx.beginPath();
           ctx.arc(bpx, bpy, cRng, 0, Math.PI * 2);
           ctx.fillStyle = 'rgba(255,60,0,0.04)';
@@ -2159,21 +2187,27 @@ function renderBuildings() {
   var el = document.getElementById('bldList');
   if (!el) return;
   var html = '', now = Date.now();
-  var bCount = mySt.bCount || 0, bMax = mySt.bMax || 4;
-  html += '<div class="bld-header">\ud83c\udfd7\ufe0f \uac74\ubb3c \ubc30\uce58 <span class="bld-count">' + bCount + '/' + bMax + '</span></div>';
+  var bCount = mySt.bCount || 0, bMax = mySt.bMax || 5;
+  var pLv = mySt.pLv || 1;
+  var maxUpgLv = Math.min(25, pLv * 3);
+  html += '<div class="bld-header">\ud83c\udfd7\ufe0f \uac74\ubb3c \ubc30\uce58 <span class="bld-count">' + bCount + '/' + bMax + '</span>';
+  html += ' <span class="bld-level">\u2b50 Lv.' + pLv + ' (\uc5c5\uadf8 \uc0c1\ud55c ' + maxUpgLv + ')</span></div>';
   if (buildPlaceMode) {
-    html += '<div class="bld-placing">\ud83d\udea7 <b>' + (BLDG[buildPlaceMode] ? BLDG[buildPlaceMode].n : '') + '</b> \ubc30\uce58\uc911 - \uc601\ud1a0\ub97c \ud074\ub9ad! <span class="bld-cancel" onclick="cancelBuildPlace()">\u2716 \ucde8\uc18c</span></div>';
+    var bpDef = BLDG[buildPlaceMode];
+    var bpSize = bpDef ? (bpDef.size || 1) : 1;
+    html += '<div class="bld-placing">\ud83d\udea7 <b>' + (bpDef ? bpDef.n : '') + '</b> (' + bpSize + '\u00d7' + bpSize + ') \ubc30\uce58\uc911 - \uc601\ud1a0\ub97c \ud074\ub9ad! <span class="bld-cancel" onclick="cancelBuildPlace()">\u2716 \ucde8\uc18c</span></div>';
   }
   var bk = Object.keys(BLDG);
   for (var i = 0; i < bk.length; i++) {
     var k = bk[i], def = BLDG[k];
     if (!def) continue;
     var totalLv = mySt.b && mySt.b[k] ? mySt.b[k].l : 0;
-    var costs = getBldgCost(k, 0); // cost to place a new level 1
+    var bSize = def.size || 1;
+    var costs = getBldgCost(k, 0);
     var can = canLocalAfford(costs) && bCount < bMax;
     var isSelected = buildPlaceMode === k;
     html += '<div class="bld-item' + (isSelected ? ' selected' : '') + '" onclick="buildItem(\'' + k + '\')">';
-    html += '<div class="item-header"><span class="item-name">' + (def.icon || '') + ' ' + def.n + '</span>';
+    html += '<div class="item-header"><span class="item-name">' + (def.icon || '') + ' ' + def.n + ' <span class="bld-size">' + bSize + '\u00d7' + bSize + '</span></span>';
     html += '<span class="item-level">\u2211 Lv.' + totalLv + '</span></div>';
     html += '<div class="item-desc">' + def.desc + '</div>';
     html += '<div class="item-cost">\uc2e0\uaddc: ' + formatCost(costs, can) + '</div>';
@@ -2506,7 +2540,7 @@ function resize() {
 }
 
 function sendViewport() {
-  socket.emit('vp', {
+  socket.volatile.emit('vp', {
     x: Math.max(0, Math.floor(camX)),
     y: Math.max(0, Math.floor(camY)),
     w: Math.ceil(vpW/zoom) + chunkSz,
@@ -2514,10 +2548,8 @@ function sendViewport() {
   });
 }
 
-var vpTimer = 0;
 function throttledVP() {
-  var now = Date.now();
-  if (now - vpTimer > 30) { vpTimer = now; sendViewport(); }
+  sendViewport();
 }
 
 window.addEventListener('resize', function() { resize(); throttledVP(); });
