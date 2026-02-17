@@ -37,6 +37,8 @@ io.engine.use(sessionMiddleware);
 
 app.use(express.static('public'));
 
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
 // Health check for Railway
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok', round: roundNumber, phase: roundPhase, lobby: lobbyQueue.size }));
 
@@ -104,6 +106,7 @@ const TROOP_SCALE = 100; // 병력 스케일 (현실적 숫자: 천/만/십만)
 const RES_INT = 10000, TROOP_INT = 5000;
 const BOT_INT = 2000, CAMP_INT = 15000, LB_INT = 1000, ST_INT = 500, SAVE_INT = 120000;
 const UNIT_BROADCAST_INT = 100;
+const EXP_EVENT_MIN_INTERVAL = 40;
 const BOT_COUNT = 8;
 const SAVE_FILE = './gamestate.json';
 
@@ -2923,7 +2926,17 @@ io.on('connection', (socket) => {
     if (chunks.length > 0) socket.emit('ch', chunks);
   });
 
-  socket.on('exp', (d) => { if (!d) return; const pi = pidMap[socket.id]; if (pi !== undefined) { expandToward(pi, d.x, d.y); flushDirtyToAll(); sendQuickState(pi); } });
+  socket.on('exp', (d) => {
+    if (!d) return;
+    const pi = pidMap[socket.id];
+    if (pi === undefined) return;
+    const now = Date.now();
+    if (socket._lastExpAt && now - socket._lastExpAt < EXP_EVENT_MIN_INTERVAL) return;
+    socket._lastExpAt = now;
+    const tx = Math.floor(d.x), ty = Math.floor(d.y);
+    if (!validCell(tx, ty)) return;
+    expandToward(pi, tx, ty);
+  });
   socket.on('bpush', () => { const pi = pidMap[socket.id]; if (pi !== undefined) { borderPush(pi); flushDirtyToAll(); sendQuickState(pi); } });
   socket.on('matk', (d) => { if (!d) return; const pi = pidMap[socket.id]; if (pi !== undefined) { massiveAttack(pi, d.tx, d.ty); flushDirtyToAll(); sendQuickState(pi); } });
 

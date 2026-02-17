@@ -55,8 +55,18 @@ var dragStartX = 0, dragStartY = 0, dragging = false;
 var massAtkMode = false;
 var keys = {};
 var lastExpTime = 0;
+var lastExpEmitAt = 0;
+var lastExpCellX = -1;
+var lastExpCellY = -1;
+var EXP_EMIT_MIN_INTERVAL = 60;
 function emitExp(x, y) {
   if (!mySt || mySt.tt < 100) return;
+  var now = Date.now();
+  if (x === lastExpCellX && y === lastExpCellY && now - lastExpEmitAt < 200) return;
+  if (now - lastExpEmitAt < EXP_EMIT_MIN_INTERVAL) return;
+  lastExpEmitAt = now;
+  lastExpCellX = x;
+  lastExpCellY = y;
   socket.volatile.emit('exp', {x: x, y: y});
 }
 
@@ -669,10 +679,11 @@ function renderSpawnMap(canvasId) {
     var pi2 = i * 4;
     var px = i % dd.w, py = Math.floor(i / dd.w);
     var gx = px * scale, gy = py * scale;
-    if (dd.o[i] === 1) {
+    var dov = dd.o ? dd.o[i] : 0;
+    if (dov === 1) {
       // Player territory
       img.data[pi2]=255; img.data[pi2+1]=255; img.data[pi2+2]=200;
-    } else if (dd.o[i] === 2) {
+    } else if (dov === 2) {
       // Barbarian
       img.data[pi2]=80; img.data[pi2+1]=0; img.data[pi2+2]=0;
     } else {
@@ -986,8 +997,9 @@ socket.on('tp', function(d) {
   for (var i = 0; i < d.t.length; i++) {
     var tc = TERRAIN_COLORS[d.t[i]] || [0,0,0];
     var pi2 = i * 4;
-    if (d.o[i] === 1) { img.data[pi2]=255; img.data[pi2+1]=255; img.data[pi2+2]=200; }
-    else if (d.o[i] === 2) { img.data[pi2]=80; img.data[pi2+1]=0; img.data[pi2+2]=0; }
+    var dov = d.o ? d.o[i] : 0;
+    if (dov === 1) { img.data[pi2]=255; img.data[pi2+1]=255; img.data[pi2+2]=200; }
+    else if (dov === 2) { img.data[pi2]=80; img.data[pi2+1]=0; img.data[pi2+2]=0; }
     else { img.data[pi2]=tc[0]; img.data[pi2+1]=tc[1]; img.data[pi2+2]=tc[2]; }
     img.data[pi2+3] = 255;
   }
@@ -1031,7 +1043,7 @@ socket.on('enterLobby', function(d) {
   mySt = null;
   myPi = -1;
   alive = false;
-  bCtx.fillStyle = '#000';
+  bCtx.fillStyle = '#0e204e';
   bCtx.fillRect(0, 0, buf.width, buf.height);
   // Hide round end overlay
   var reo = document.getElementById('roundEndOverlay');
@@ -1068,7 +1080,7 @@ socket.on('roundReset', function(d) {
   unitDustParticles = [];
   lb = { p: [], c: [] };
   mySt = null;
-  bCtx.fillStyle = '#000';
+  bCtx.fillStyle = '#0e204e';
   bCtx.fillRect(0, 0, buf.width, buf.height);
   var reo = document.getElementById('roundEndOverlay');
   if (reo) reo.style.display = 'none';
@@ -1509,8 +1521,8 @@ function draw() {
   // Clamp camera to prevent black screen
   clampCamera();
 
-  // Dark background
-  ctx.fillStyle = '#08081a';
+  // Dark ocean background (matches buffer)
+  ctx.fillStyle = '#0e204e';
   ctx.fillRect(0, 0, w, h);
 
   // Apply screen shake
@@ -1694,7 +1706,7 @@ function draw() {
         if (pch2) {
           var plx2 = ((pcx%chunkSz)+chunkSz)%chunkSz;
           var ply2 = ((pcy%chunkSz)+chunkSz)%chunkSz;
-          var po2 = pch2.o[ply2*chunkSz+plx2];
+          var po2 = pch2.o ? pch2.o[ply2*chunkSz+plx2] : -1;
           cellValid = (po2 === myPi);
           // Check if cell has existing building
           if (pch2.bl) {
@@ -1778,7 +1790,7 @@ function draw() {
       var hly = ((hy%chunkSz)+chunkSz)%chunkSz;
       var hli = hly*chunkSz+hlx;
       var ht = hch.t[hli];
-      var ho = hch.o[hli];
+      var ho = hch.o ? hch.o[hli] : -1;
 
       // Barbarian label
       if (ho === -2 && zoom >= 10) {
@@ -2044,7 +2056,7 @@ function draw() {
       var hly2 = ((hy2%chunkSz)+chunkSz)%chunkSz;
       var hli2 = hly2*chunkSz+hlx2;
       var ht2 = hch2.t[hli2];
-      var ho2 = hch2.o[hli2];
+      var ho2 = hch2.o ? hch2.o[hli2] : -1;
       var hsp2 = hch2.sp ? hch2.sp[hli2] : 0;
       var hfog2 = hch2.fog ? hch2.fog[hli2] : 0;
       var tNames = ['해양','평원','숲','사막','산맥','툰드라','빙하','얕은물','구릉','늪'];
@@ -2440,6 +2452,15 @@ function drawStormOverlay(w, h) {
 
 // ===== TERRITORY BORDERS =====
 function drawTerritoryBorders(w, h) {
+  function safeOwnerFromChunk(ch, lx, ly) {
+    if (!ch || !ch.o) return -1;
+    var arr = ch.o;
+    var idx2 = ly * chunkSz + lx;
+    if (idx2 < 0 || idx2 >= arr.length) return -1;
+    var v = arr[idx2];
+    return (typeof v === 'number') ? v : -1;
+  }
+
   var vx0 = Math.floor(camX), vy0 = Math.floor(camY);
   var vx1 = Math.ceil(camX + w/zoom), vy1 = Math.ceil(camY + h/zoom);
   var baseWidth = Math.max(1.2, zoom * 0.22);
@@ -2454,7 +2475,7 @@ function drawTerritoryBorders(w, h) {
       if (!ch) continue;
       var lx = ((vx%chunkSz)+chunkSz)%chunkSz;
       var ly = ((vy%chunkSz)+chunkSz)%chunkSz;
-      var o = ch.o[ly*chunkSz+lx];
+      var o = safeOwnerFromChunk(ch, lx, ly);
       if (o < 0) continue;
       var color = pColors[o];
       if (!color) continue;
@@ -2469,7 +2490,7 @@ function drawTerritoryBorders(w, h) {
           if (nch) {
             var nlx = ((nx%chunkSz)+chunkSz)%chunkSz;
             var nly = ((ny%chunkSz)+chunkSz)%chunkSz;
-            nOwner = nch.o[nly*chunkSz+nlx];
+            nOwner = safeOwnerFromChunk(nch, nlx, nly);
           }
         }
         if (nOwner !== o) {
@@ -2527,7 +2548,7 @@ function drawPlayerLabels(w, h) {
         if (!sch) continue;
         var slx = ((sx%chunkSz)+chunkSz)%chunkSz;
         var sly = ((sy%chunkSz)+chunkSz)%chunkSz;
-        if (sch.o[sly*chunkSz+slx] == pi2) {
+        if (sch.o && sch.o[sly*chunkSz+slx] == pi2) {
           sumX += sx; sumY += sy; count++;
         }
       }
